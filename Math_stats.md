@@ -4,10 +4,10 @@
 
 The piecewise linear model is computationally unstable because of the discontinuity in the model's first derivative Qian and Richardson (1997). The discontinuous first-order derivative
 
-$$
+\begin{equation}
 \frac{dy}{dx}=\begin{cases} \beta_0 & \text{when } \log(Chla) \leq
   \phi\\ \beta_1 &\text{when } \log(Chla) > \phi \end{cases}
-$$
+\end{equation}
 can be approximated by a general logistic model:
 
 $$
