@@ -1,0 +1,56 @@
+---
+title: "Lake Erie Microcystin Risk Assessment -- Exploratory Data Analysis"
+author: "Song Qian"
+date: "8/14/2019"
+output: pdf_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Initial setup
+```{r}
+source("FrontMatter.R")
+source("eriedataClean.RData")
+```
+
+## Exploratory plots
+
+```{r}
+pairs(part_microcystin~TP+SRP+NH4+NO3+TDP+Chla, data=eriedata)
+
+pairs(part_microcystin~TP+SRP+I(NH4/1000+NO3)+Chla+Surf_Temp+
+        Secchi+POC+NH4+NO3,
+      data=eriedata,log="xy")
+
+xyplot(Surf_Temp ~ jitter(as.numeric(Month)), data=eriedata, 
+       xlab="Month", ylab="Temperature ($^\\circ$C)")
+
+xyplot(log(part_microcystin) ~ jitter(as.numeric(Month)), 
+       data=eriedata, xlab="Month", ylab="log(MC)")
+
+xyplot(log(part_microcystin) ~ Surf_Temp|Month, data=eriedata,
+           xlab="Temperature", ylab="log(MC)")
+
+par(mar=c(3, 3, 0.75, 0.25), mgp=c(1.25, 0.125, 0), las=1, 
+    tck=0.01)
+plot(log(part_microcystin) ~ log(POC), data=eriedata[temp,],
+     xlab="POC (mg/L)", subset=part_microcystin>0 & POC>0,
+     ylab="MC Concentration ($\\mu$g/L)", axes=F)
+axis(1, at=log(c(0.1, 1, 10, 50, 100, 200, 250)),
+     label=c(c(0.1, 1, 10, 50, 100, 200, 250)))
+axis(2, at=log(c(0.1,1,10,50,100,300)),
+     label=c(0.1, 1, 10, 50, 100,300))
+box()
+
+xyplot(log(POC) ~ jitter(as.numeric(Month)), data=eriedata,
+       xlab="Month", ylab="log(POC)")
+## explore within month temperature effects
+
+xyplot(log(part_microcystin) ~ log(POC)|Year, 
+       data=eriedata[temp,],
+       xlab="Log POC (mg/L)",
+       ylab="MC Concentration (Log $\\mu$g/L)",
+       layout=c(3,3))
+```
+

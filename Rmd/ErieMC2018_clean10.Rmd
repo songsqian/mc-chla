@@ -1,0 +1,202 @@
+---
+title: "Lake Erie Microcystin Risk Assessment -- Presenting Sequantial Updating Results"
+author: "Song Qian"
+date: "8/14/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## Initial setup
+```{r}
+source("FrontMatter.R")
+load("eriedataClean.RData")
+source("sequential.R") ## R functions for 
+                       ## subsetting data
+                       ## prior
+                       ## Stan model and input function
+load("MC_Chla_no18_17.RData")
+load("MC_Chla.RData")
+stanfit_1817 <- rstan::extract(fit2keep_1817$fit, permuted=T)
+stanfit_full <- rstan::extract(fit2keep_full$fit, permuted=T)
+
+## hyper-parameters
+##beta0_rv_sum <- summary(beta0_rv <- rvsims(stanout_1817$B0))
+##delta_rv_sum <- summary(delta_rv <- rvsims(stanout_1817$De))
+##phi_rv_sum   <- summary(phi_rv <- rvsims(stanout_1817$Ph))
+
+## annual values
+##be0_re_rv_sum<- 
+##  summary(be0_re_rv <- rvsims(stanout_1817$delB0))
+##det_re_rv_sum<- 
+##  summary(det_re_rv <- rvsims(stanout_1817$delD))
+##phi_re_rv_sum<- 
+##  summary(phi_re_rv <- rvsims(stanout_1817$delP))
+##sigma_rv_sum<- 
+##  summary(sigma_rv <- rvsims(stanout_1817$sigma))
+```
+
+## Presenting Fitted Models
+
+```{r}
+## R functions for plotting by time step
+  plotBYwks <- function(j=1, Xlab="Chla ($\\mu$g/L)",
+                        Ylab="Particulate Microcystin ($\\mu$g/L)",
+  			  Lab1=c(c(0.1, 1, 10, 50, 100, 200, 250)),
+	  		  Lab2=c(0.1, 1, 10, 50, 100,300), 
+  			  stanout=stanfit_full, Yr=2018){
+
+    beta0_rv_sum <- summary(beta0_rv <- rvsims(stanout$B0))
+    delta_rv_sum <- summary(delta_rv <- rvsims(stanout$De))
+    phi_rv_sum   <- summary(phi_rv <- rvsims(stanout$Ph))
+    be0_re_rv_sum<- 
+      summary(be0_re_rv <- rvsims(stanout$delB0))
+    det_re_rv_sum<- 
+      summary(det_re_rv <- rvsims(stanout$delD))
+    phi_re_rv_sum<- 
+      summary(phi_re_rv <- rvsims(stanout$delP))
+    sigma_rv_sum<- 
+      summary(sigma_rv <- rvsims(stanout$sigma))
+    YrData <- erie_sub(Yr=Yr)
+	temp1 <- YrData$gr==j
+	theta <- 0.01*diff(range(log(YrData$Chla), na.rm=T))
+	plot(log(part_microcystin) ~ log(Chla), data=YrData,
+	     xlab=Xlab, ylab=Ylab, axes=F, col=grey(0.75))
+	axis(1, at=log(c(0.1, 1, 10, 50, 100, 200, 250)),
+	     label=Lab1)
+	axis(2, at=log(c(0.1,1,10,50,100,300)),
+	     label=Lab2)
+	box()
+	for (i in 1:100)
+	    curve((stanout$B0[i]+stanout$delB0[i, j])+
+		  (stanout$De[i]+stanout$delD[i, j])*theta*
+		  log1p(exp((x-(stanout$Ph[i]+stanout$delP[i, j]))/theta)),
+		  col=grey(0.5),add=T)
+	curve((beta0_rv_sum$'50%'+be0_re_rv_sum$'50%'[j]) +
+	      (delta_rv_sum$'50%'+det_re_rv_sum$'50%'[j])*theta*
+	      log1p(exp((x-(phi_rv_sum$'50%'+phi_re_rv_sum$'50%'[j]))/theta)),
+	      add=T)
+	points(log(YrData$Chla)[temp1],
+	       log(YrData$part_microcystin)[temp1],
+	       col="red")
+	invisible()    
+}
+
+annual_figures <- function(Year=2018,  dataAll=eriedata, 
+                           PDF=F, TeX=F){
+  load(paste("MC_CHLA_",Year, ".RData", sep=""))
+  load(paste("MC_CHLA_", Year, "_inc.RData", sep=""))
+  model_coef1 <- fitcoef1
+  model_coef2 <- fitcoef2
+  tmp <- (dataAll$Chla > 0 & !is.na(dataAll$Chla)) &
+    (dataAll$part_microcystin > 0 &
+       !is.na(dataAll$part_microcystin))
+  dataAll <- dataAll[tmp,]
+  subdata <- erie_sub(Yr=Year)
+  grps <- max(subdata$gr)
+  gr_rows <- ceiling(grps/5)
+  subdata <- subdata[!is.na(subdata$Chla),]
+  Xlim <- log(range(dataAll$Chla))
+  Xlim_sub <- range(subdata$Chla)
+      ## print(summary(dataAll$Chla))
+  xx <- log(seq(Xlim_sub[1], Xlim_sub[2],length=100))
+  if (!PDF & !TeX) par(ask=F)
+    if (PDF){
+	  pdf(file=paste(plotDIR, paste("erie", Year, ".pdf", sep=""),
+	                 sep="/"), height=gr_rows*4/3, width=7.75)
+      }else if (TeX){
+	  tikz(file=paste(plotDIR, paste("erie", Year, ".tex", sep=""),
+	                  sep="/"), height=gr_rows*4/3, width=7.75, 
+	       stanAlone=F)
+  }
+
+  par(mfrow=c(gr_rows,5), mar=c(2,2,0,0), mgp=c(1.25, 0.125,0),
+	    oma=c(2,2,1,1), tck=0.01)
+  for (i in 1:max(subdata$gr)){
+	  temp <- subdata$gr<=i
+	  yy <- summary(hockey_smooth(x=xx, beta0=model_coef1[[i]][1],
+	   			        delta=model_coef1[[i]][2],
+				          phi=model_coef1[[i]][3]))
+
+	  yy2 <- summary(hockey_smooth(x=xx, beta0=model_coef1[[i]][5],
+				           delta=model_coef1[[i]][6],
+				           phi=model_coef1[[i]][7]))
+	  plot(log(dataAll$Chla), log(dataAll$part_microcystin),
+	       type="n", xlab="", ylab="", axes=F)
+	  usr <- par("usr")
+	  points(log(dataAll$Chla), log(dataAll$part_microcystin),
+	         col=gray(0.8))
+	  polygon(x=c(xx, rev(xx)), y=c(yy[,4], rev(yy[, 8])),
+		  border=F, col="gray")
+	  points(log(subdata$Chla), log(subdata$part_microcystin),
+	         col=gray(0.5))
+	  points(log(subdata$Chla[temp]),
+	         log(subdata$part_microcystin[temp]), col="red", pch=16)
+	  lines(xx, yy[,6])
+	  lines(xx, yy2[,6], col="blue")
+	  axis(1, at=log(c(0.1, 1, 10, 20, 50, 100, 1000, 10000)),
+	       label=    c(0.1, 1, 10, 20, 50, 100, 1000, 10000))
+	  axis(2, at=log(c(0.01, 0.05, 0.5, 5, 10, 100)),
+	       label=    c(0.01, 0.05, 0.5, 5, 10, 100))
+	  box()
+	  text(usr[1], usr[4],adj=c(0, 1), max(subdata$Rdate[temp])) 
+      }
+      mtext("Chla Concentration", 1, outer=T, line=0.5)
+      mtext("Particulate Microcystin", 2, outer=T, line=0.5, las=0)
+
+      if (PDF | TeX)
+	  dev.off()
+
+      if (PDF){
+	  pdf(file=paste(plotDIR, paste("erie", Year, "_inc.pdf", sep=""), sep="/"), 
+	      height=gr_rows*4/3, width=7.75)
+      }else if (TeX){
+	  tikz(file=paste(plotDIR, paste("erie", Year, "_inc.tex",
+	                                 sep=""), sep="/"), 
+	       height=gr_rows*4/3, width=7.75, stanAlone=F)
+      } else {par(ask=T)}
+      par(mfrow=c(gr_rows,5), mar=c(2,2,0,0), mgp=c(1.25, 0.125,0),
+          oma=c(2,2,1,1), las=1, tck=0.01)
+      for (i in 1:max(subdata$gr)){
+	  temp <- subdata$gr==i
+	  yy <- summary(hockey_smooth(x=xx, beta0=model_coef2[[i]][1],
+				  delta=model_coef2[[i]][2],
+				  phi=model_coef2[[i]][3]))
+
+	  yy2 <- summary(hockey_smooth(x=xx, beta0=model_coef2[[i]][5],
+				       delta=model_coef2[[i]][6],
+				       phi=model_coef2[[i]][7]))
+	  plot(log(dataAll$Chla), log(dataAll$part_microcystin), type="n",
+	       xlab="",
+	       ylab="", axes=F)
+	  usr <- par("usr")
+	  points(log(dataAll$Chla), log(dataAll$part_microcystin),
+	         col=gray(0.8))
+	  polygon(x=c(xx, rev(xx)), y=c(yy[,4], rev(yy[, 8])),
+		        border=F, col="gray")
+	  points(log(subdata$Chla), log(subdata$part_microcystin),
+	         col=gray(0.5))
+	  points(log(subdata$Chla[temp]),
+	         log(subdata$part_microcystin[temp]),
+	         col="red", pch=16)
+	  lines(xx, yy[,1])
+	  lines(xx, yy2[,1], col="blue")
+	  axis(1, at=log(c(0.1,1,5, 10, 20, 50, 100, 1000, 10000)),
+	       label=c(0.1,1,5, 10, 20, 50, 100, 1000, 10000))
+	  axis(2, at=log(c(0.01, 0.05, 1, 0.5, 1, 2, 5, 10, 100)),
+	       label=c(0.01, 0.05, 1, 0.5, 1, 2, 5, 10, 100))
+	  box()
+	  text(usr[1], usr[4],adj=c(0, 1), max(subdata$Rdate[temp])) 
+  }
+  mtext("Chla Concentration", 1, outer=T, line=0.5)
+  mtext("Particulate Microcystin", 2, outer=T, line=0.5, las=0)
+
+      if(PDF | TeX) dev.off()
+      invisible()
+}
+
+  for (yr in 2012:2018)
+      annual_figures (Year=yr, dataAll=eriedata, PDF=F, TeX=F)
+```
+

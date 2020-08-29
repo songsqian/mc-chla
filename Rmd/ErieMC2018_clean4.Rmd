@@ -1,0 +1,65 @@
+---
+title: "Lake Erie Microcystin Risk Assessment -- Hierarchical Model (fit to subsets of data)"
+author: "Song Qian"
+date: "8/14/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Initial setup
+```{r}
+source("FrontMatter.R")
+load("eriedataClean.RData")
+```
+
+## Hierarchical Models 
+
+Using various subsets
+```{r}
+source("BHierM.R")
+## compile model
+fit <- stan_model(model_code = stan_model2)
+
+## no scum:
+temp <- !is.na(eriedata$part_microcystin) &
+  !is.na(eriedata$Chla) & eriedata$Chla> 0 & 
+  eriedata$part_microcystin > 0 &
+  (eriedata$Sample_Depth!=0 |
+     is.na(eriedata$Sample_Depth))
+fit2keep_noscum <- running_fun(Data=eriedata[temp,])
+
+save(fit2keep_noscum, file="MC_Chla_noscum.RData")
+load("MC_Chla_noscum.RData")
+## fit2keep_noscum <- fit2keep
+print(fit2keep_noscum$fit)
+stanfit_noscum <- extract(fit2keep_noscum$fit)
+
+## No bottom samples
+temp <- !is.na(eriedata$part_microcystin) &
+  !is.na(eriedata$Chla) & eriedata$Chla> 0 & 
+  eriedata$part_microcystin > 0 &
+  (eriedata$Sample_Depth <= 0.75 | 
+     is.na(eriedata$Sample_Depth))
+fit2keep_nobottom <- running_fun(Data=eriedata[temp,])
+save(fit2keep_nobottom, file="MC_Chla_nobottom.RData")
+load("MC_Chla_nobottom.RData")
+## fit2keep_nobottom <- fit2keep$fit
+print(fit2keep_nobottom$fit)
+stanfit_nobottom <- extract(fit2keep_nobottom$fit)
+
+## no scum & no bottom:
+temp <- !is.na(eriedata$part_microcystin) &
+      !is.na(eriedata$Chla) & eriedata$Chla> 0 & 
+      eriedata$part_microcystin > 0 &
+      (eriedata$Sample_Depth==0.75|is.na(eriedata$Sample_Depth))
+fit2keep_075 <- running_fun(Data=eriedata[temp,])
+save(fit2keep_075, file="MC_Chla_075.RData")
+load("MC_Chla_075.RData")
+## fit2keep_075 <- fit2keep
+print(fit2keep_075$fit)
+stanfit_075 <- extract(fit2keep_075$fit)
+```
+

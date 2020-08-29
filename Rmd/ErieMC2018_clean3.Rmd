@@ -1,0 +1,36 @@
+---
+title: "Lake Erie Microcystin Risk Assessment -- Hierarchical Model"
+author: "Song Qian"
+date: "8/14/2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Initial setup
+```{r}
+source("FrontMatter.R")
+load("eriedataClean.RData")
+```
+
+## Fitting BHM 
+
+Using data from all years -- an empirical Bayes approach.
+```{r}
+source("BHierM.R") ## model code and input data functions
+
+## compile model
+fit <- stan_model(model_code = stan_model2)
+
+## Full data
+temp <- !is.na(eriedata$part_microcystin) &
+  !is.na(eriedata$Chla) & eriedata$Chla> 0 & 
+  eriedata$part_microcystin > 0
+fit2keep_full <- running_fun(Data=eriedata[temp,])
+save(fit2keep_full, file="MC_Chla.RData")
+## load("MC_Chla.RData")
+print(fit2keep_full$fit)
+stanfit_full <- extract(fit2keep_full$fit)
+```

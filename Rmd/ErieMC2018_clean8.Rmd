@@ -1,0 +1,55 @@
+---
+title: "Lake Erie Microcystin Risk Assessment -- Without 2017 and 2018"
+author: "Song Qian"
+date: "8/14/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Initial setup
+```{r}
+source("FrontMatter.R")
+load("eriedataClean.RData")
+```
+
+
+## The multi-year BHM model
+
+Using data up to 2016 to develop priors for predicting 2017 and 2018
+
+### Sub-setting data
+
+```{r}
+source("BHierM.R") ## model code and input data functions
+
+## Stan model output for all years (except 2017 & 2018)
+## Full data
+temp1817 <- !is.na(eriedata$part_microcystin) &
+  !is.na(eriedata$Chla) & eriedata$Chla> 0 & 
+  eriedata$part_microcystin > 0 & 
+  eriedata$Year != "2018" & eriedata$Year != "2017"
+fit2keep_1817 <- running_fun(Data=eriedata[temp1817,])
+save(fit2keep_1817, file="MC_Chla_no18_17.RData")
+load("MC_Chla_no18_17.RData")
+load("Origin_MC_Chla.RData")
+print(fit2keep_1817$fit)
+stanout_1817 <- rstan::extract(fit2keep_1817$fit, permuted=T)
+
+## hyper-parameters
+beta0_rv_sum <- summary(beta0_rv <- rvsims(stanout_1817$B0))
+delta_rv_sum <- summary(delta_rv <- rvsims(stanout_1817$De))
+phi_rv_sum   <- summary(phi_rv <- rvsims(stanout_1817$Ph))
+
+## annual values
+be0_re_rv_sum<- 
+  summary(be0_re_rv <- rvsims(stanout_1817$delB0))
+det_re_rv_sum<- 
+  summary(det_re_rv <- rvsims(stanout_1817$delD))
+phi_re_rv_sum<- 
+  summary(phi_re_rv <- rvsims(stanout_1817$delP))
+sigma_rv_sum<- 
+  summary(sigma_rv <- rvsims(stanout_1817$sigma))
+

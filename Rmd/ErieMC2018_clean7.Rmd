@@ -1,0 +1,66 @@
+---
+title: "Lake Erie Microcystin Risk Assessment -- Exceedance Probability"
+author: "Song Qian"
+date: "8/14/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Initial setup
+```{r}
+source("FrontMatter.R")
+load("eriedataClean.RData")
+load("MC_Chla.RData")
+## fit2keep_full <- fit2keep$fit
+print(fit2keep_full$fit)
+
+```
+
+```{r}
+
+##############################################
+## probability of exceeding 1, 5, 8, 10, 20 ##
+##  @ chla=10, 30, 50, 100, 200             ##
+## full data model
+
+theta <- fit2keep_full$input$data$theta
+fitStan <- rstan::extract(fit2keep_full$fit, permuted=T)
+xx <- log(c(10, 30, 50, 100, 200))
+beta0_rv <- rvsims(fitStan$B0)
+##beta1_rv_sum <- summary(beta1_rv <- rvsims(stanout$B1))
+delta_rv <- rvsims(fitStan$De)
+phi_rv <- rvsims(fitStan$Ph)
+be0_re_rv <- rvsims(fitStan$delB0)
+det_re_rv <- rvsims(fitStan$delD)
+phi_re_rv <- rvsims(fitStan$delP)
+sigma_rv <- rvsims(fitStan$sigma)
+xxmean <- (beta0_rv+be0_re_rv[10])+
+  (delta_rv+det_re_rv[10])*theta*
+  log1p(exp((xx-(phi_rv+phi_re_rv[10]))/theta))
+mc_pred <- rvnorm(1, xxmean, sigma_rv)
+exceed <- rbind(Pr(mc_pred>log(1)),
+                Pr(mc_pred>log(5)),
+                Pr(mc_pred>log(8)),
+                Pr(mc_pred>log(10)),
+                Pr(mc_pred>log(20)))
+rownames(exceed) <- 
+  c("MC>1", "MC>5","MC>8","MC>10","MC>20")
+colnames(exceed) <- 
+  c("Chla=10", "Chla=30", "Chla=50", "Chla=100", "Chla=500")
+write.csv(exceed, file="Pr_exceed_pred.csv")
+
+exceed_mean<- rbind(Pr(xxmean> log(1)),
+                    Pr(xxmean> log(5)),
+                    Pr(xxmean> log(8)),
+                    Pr(xxmean> log(10)),
+                    Pr(xxmean>log(20)))
+rownames(exceed_mean)<-
+  c("MC>1","MC>5","MC>8","MC>10","MC>20")
+colnames(exceed_mean)<-
+  c("Chla=10", "Chla=30", "Chla=50", "Chla=100", "Chla=500")
+write.csv(exceed_mean, file="Pr_exceed_mean.csv")
+```
+

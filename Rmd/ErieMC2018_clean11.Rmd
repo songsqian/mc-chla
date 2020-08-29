@@ -1,0 +1,167 @@
+---
+title: "Lake Erie Microcystin Risk Assessment -- Risk Forecasting"
+author: "Song Qian"
+date: "8/14/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Initial setup
+```{r}
+source("FrontMatter.R")
+load("eriedataClean.RData")
+source("sequential.R") ## R functions for 
+                       ## subsetting data
+                       ## prior
+                       ## Stan model and input function
+load("MC_Chla_no18_17.RData")
+load("MC_Chla.RData")
+stanfit_1817 <- rstan::extract(fit2keep_1817$fit, permuted=T)
+stanfit_full <- rstan::extract(fit2keep_full$fit, permuted=T)
+```
+## Risk Forecasting
+
+```{r}
+## R functions for plotting forecasted MC (oncentration plus probability)
+
+mc_chla_for <- function(Year=2018, dataAll=eriedata, PDF=F,
+                        TeX=F, cr=c(1, 8, 20), px=0.6, 
+                        py=0.25, txsize=0.75, 
+                        no1718=TRUE){
+  if (no1718){
+    load(paste("No17_18_MC_CHLA_",Year, ".RData", sep=""))
+    load(paste("No17_18_MC_CHLA_", Year, "_inc.RData", 
+               sep=""))
+  }
+  else {
+    load(paste("MC_CHLA_",Year, ".RData", sep=""))
+    load(paste("MC_CHLA_", Year, "_inc.RData", sep=""))
+  }
+  model_coef1 <- fitcoef1
+  model_coef2 <- fitcoef2
+  tmp <- (dataAll$Chla > 0 & !is.na(dataAll$Chla)) &
+    (dataAll$part_microcystin > 0 &
+       !is.na(dataAll$part_microcystin))
+  dataAll <- dataAll[tmp,]
+  subdata <- erie_sub(Yr=Year)
+  grps <- max(subdata$gr)
+  gr_rows <- ceiling((grps-2)/5)
+  subdata <- subdata[!is.na(subdata$Chla),]
+  Xlim <- log(range(dataAll$Chla))
+  Xlim_sub <- range(subdata$Chla)
+  Ylim_sub <- log(range(subdata$part_microcystin))
+  pr_lab <- seq(0,1,0.2)
+  Ylab_at  <- Ylim_sub[1] + pr_lab*(diff(Ylim_sub))
+
+  ## print(summary(dataAll$Chla))
+  xx <- log(seq(Xlim_sub[1], Xlim_sub[2],length=100))
+  if (PDF){
+	  pdf(file=paste(plotDIR, paste("erie", Year, "_prob.pdf",
+	                                sep=""), sep="/"), 
+	      height=gr_rows*4/3, width=7.75)
+  }else if (TeX){
+	  tikz(file=paste(plotDIR, paste("erie", Year, "_prob.tex", 
+	                                 sep=""), sep="/"), 
+	       height=gr_rows*4/3, width=7.75, stanAlone=F)
+  }
+  par(mfrow=c(gr_rows,5), mar=c(2,2,0,2), 
+      mgp=c(1.25, 0.125,0), oma=c(2,2,1,2), las=1, 
+      tck=0.01)
+  Bayes_p <- list()
+  for (i in 2:(grps-1)){
+    temp <- subdata$gr==i
+    xx2 <- log(subdata$Chla[temp])
+	  yy2 <- log(subdata$part_microcystin[temp])
+	  y_mu <- hockey_smooth(x=xx,
+	        beta0=model_coef1[[i-1]][1],	  
+	        delta=model_coef1[[i-1]][2],
+			    phi=model_coef1[[i-1]][3])
+	  y_sigma  <- model_coef1[[i-1]][4]
+	  yy_rep <- rvnorm(1, y_mu, y_sigma)
+	  yy  <- summary(y_mu)
+	  y_mu2 <- hockey_smooth(x=xx2,
+	            beta0=model_coef1[[i-1]][1],
+				      delta=model_coef1[[i-1]][2],
+				      phi=model_coef1[[i-1]][3])
+	  yy2_mus <- sims(y_mu2)
+	  yy2_sigmas <- sims(y_sigma)
+	  obj_quant <- matrix(0, nrow=getnsims(), ncol=length(xx2))
+    for (k in 1:length(yy2)){
+      obj_quant[,k] <- pnorm(yy2[k], yy2_mus[,k], yy2_sigmas)
+    } 
+	  Bayes_p[[i]] <- rvsims(obj_quant)
+	  plot(log(subdata$Chla), log(subdata$part_microcystin),
+	       type="n", xlab="", ylab="", axes=F)
+	  usr <- par("usr")
+	  polygon(x=c(xx, rev(xx)), y=c(yy[,4], rev(yy[, 8])),
+		  border=F, col="gray")
+	  points(log(subdata$Chla[temp]),
+	         log(subdata$part_microcystin[temp]), 
+	         col="red", pch=16)
+	  lines(xx, yy[,6])
+	  for (k in 1:length(cr)){
+	    y_prob <- diff(Ylim_sub)*Pr(yy_rep >= log(cr[k])) +
+	      Ylim_sub[1]
+	    lines(xx, y_prob, lty=1+k)
+	  }
+	  axis(1, at=log(c(0.1,1,5, 10, 20, 50, 100, 1000, 10000)),
+	       label=c(0.1, 1, 5, 10, 20, 50, 100, 1000, 10000))
+	  axis(2, at=log(c(0.01, 0.05, 1, 0.5, 1, 2, 5, 10, 100)),
+	       label=c(0.01, 0.05, 1, 0.5, 1, 2, 5, 10, 100))
+	  axis(4, at=Ylab_at, labels=pr_lab)
+	  abline(h=log(cr), col="gray")
+	  box()
+	  text(1.05*usr[1], 0.95*usr[4], adj=c(0, 1),
+	       max(subdata$Rdate[temp]), cex=txsize) 
+    }
+    legend(usr[1] + px*(usr[2]-usr[1]), usr[3]+py*(usr[4]-usr[3]),
+	     lty=2:(1+length(cr)), legend=paste("Pr(MC>", cr, ")", sep=""),
+	     bty="n", cex=txsize)
+      mtext("Chla Concentration", 1, outer=T, line=0.5)
+      mtext("Particulate Microcystin", 2, outer=T, line=0.5, las=0)
+      mtext("Exceedance Probability", 4, outer=T, line=0.5, las=0)
+      if (PDF | TeX) dev.off()
+      invisible(Bayes_p)
+}
+
+mc_chla_for(Year=2017, cr=c(1, 8, 20), px=0.01, py=0.94,
+            PDF=F, txsize=0.5)->prob_2017_no1718
+mc_chla_for(Year=2018, cr=c(1, 5, 8), px=0.01, py=0.9, PDF=F,
+            txsize=0.5)->prob_2018_no1718
+
+
+mc_chla_for(Year=2017, cr=c(1, 8, 20), px=0.01, py=0.94,
+            PDF=F, txsize=0.5, no1718 = F)->prob_2017
+mc_chla_for(Year=2018, cr=c(1, 5, 8), px=0.01, py=0.9, PDF=F,txsize=0.5, no1718 = F)->prob_2018
+```
+
+Using the output to construct a verification figure
+
+```{r}
+prob_tab <- function(Simout=prob_2017){
+  n <- length(Simout)
+  Bayes_p <- rv0(n-1)
+  for (i in 2:n)
+    Bayes_p[i-1] <- mean(Simout[[i]])
+    return(Bayes_p)
+}
+
+##pdf(file=paste(plotDIR, "BayesPvalue.pdf", sep="/"),height=3, width=5)
+tikz(file=paste(plotDIR, "Bayes_P.tex", sep="/"),standAlone=F, height=3, width=5)
+par(mfrow=c(1,2), mar=c(3,3,1,0.5), mgp=c(1.25,0.125,0), las=1, tck=0.01)
+plot(prob_tab(prob_2017), ylab="prediction quantile", xlab="prediction period", ylim=c(0,1))
+abline(h=c(0.95,0.5, 0.05), lty=c(2,1,2))
+text(3, 0.2, "2017")
+par(mar=c(3,0.5,1,3))
+plot(prob_tab(prob_2018), ylab="", xlab="prediction period", ylim=c(0,1), axes=F)
+abline(h=c(0.95,0.5, 0.05), lty=c(2,1,2))
+text(3, 0.2, "2018")
+axis(1)
+axis(4)
+box()
+dev.off()
+```
+

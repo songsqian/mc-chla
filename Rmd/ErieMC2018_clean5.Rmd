@@ -1,0 +1,208 @@
+---
+title: "Lake Erie Microcystin Risk Assessment -- Hierarchical Model Output"
+author: "Song Qian"
+date: "8/14/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Initial setup
+```{r}
+source("FrontMatter.R")
+load("eriedataClean.RData")
+```
+
+## Processing and plotting model results
+- `stanfit` -- output from stan
+- `stanout` -- rv summaries of stanfit
+
+### Full data
+```{r}
+temp <- !is.na(eriedata$part_microcystin) &
+  !is.na(eriedata$Chla) & eriedata$Chla> 0 & 
+  eriedata$part_microcystin > 0
+
+load("MC_Chla.RData")
+print(fit2keep_full$fit)
+stanfit_full <- extract(fit2keep_full$fit)
+
+### plotting functions (traditional `plot`)
+theta <- 0.01*diff(range(log(eriedata$Chla[temp])))
+stanout_rv <- function(stanfit){ ## processing output
+  ## creates rv objects of each parameter
+  ## returns rv_summary of each parameter
+  beta0_rv <- rvsims(stanfit$B0)
+  ##beta1_rv_sum <- summary(beta1_rv <- rvsims(stanout$B1))
+  delta_rv <- rvsims(stanfit$De)
+  phim_rv <- rvsims(stanfit$Ph)
+  be0_re_rv <- rvsims(stanfit$delB0)
+  ##be1_re_rv_sum<- 
+  ##     summary(be1_re_rv <<- rvsims(stanout$be1_re))
+  det_re_rv <- rvsims(stanfit$delD)
+  phi_re_rv <- rvsims(stanfit$delP)
+  sigma_rv <- rvsims(stanfit$sigma)
+  return(list(beta0=beta0_rv, delta=delta_rv, phim=phim_rv,
+              be0=be0_re_rv, det=det_re_rv, phi=phi_re_rv,
+              sigma=sigma_rv))
+}
+
+plot_full <- function(pltdata=eriedata, sub=temp,
+                      stanfit=stanfit_full){
+  stanout <- stanout_rv(stanfit=stanfit)
+  pltdata <- pltdata[sub,]
+  theta <- 0.01*diff(range(log(pltdata$Chla), na.rm=T))
+  plot(log(part_microcystin) ~ log(Chla), data=pltdata,
+       xlab="Chla ($\\mu$g/L)",
+       ylab="Particulate Microcystin ($\\mu$g/L)", axes=F)
+  axis(1, at=log(c(0.1, 1, 10, 50, 100, 200, 250)),
+       label=c(c(0.1, 1, 10, 50, 100, 200, 250)))
+  axis(2, at=log(c(0.1,1,10,50,100,300)),
+       label=c(0.1, 1, 10, 50, 100,300))
+  box()
+  for (i in 1:100)
+    curve(stanfit$B0[i] + ##stanout$beta1[i]*(x-stanout$phi[i])+
+    stanfit$De[i]*theta*log1p(exp((x-stanfit$Ph[i])/theta)),
+                col="gray",add=T)
+    curve(summary(stanout$beta0)$'50%' + ##beta1_rv_sum$'50%'*(x-phi_rv_sum$'50%')+
+    summary(stanout$delta)$'50%'*theta*log1p(exp((x-summary(stanout$phim)$'50%')/theta)), add=T)
+  invisible()
+}
+
+## plotting by year
+plotBYyrs <- function(j=1, Xlab="Chla ($\\mu$g/L)",
+                  Ylab="Particulate Microcystin ($\\mu$g/L)",
+                  Lab1=c(c(0.1, 1, 10, 50, 100, 200, 250)),
+                  Lab2=c(0.1, 1, 10, 50, 100,300),
+                  data=eriedata, sub=temp, 
+                  stanfit=stanfit_full){
+  stanout <- stanout_rv(stanfit=stanfit)
+  yrs <- levels(ordered(data$Year[sub]))
+  theta <- 0.01*diff(range(log(data$Chla[sub]), na.rm=T))
+  temp1 <- data$Year[sub]==yrs[j]
+  theta <- 0.01*diff(range(log(data$Chla[sub]), na.rm=T))
+  plot(log(part_microcystin) ~ log(Chla), data=data[sub,],
+       xlab=Xlab, ylab=Ylab, axes=F, col=grey(0.75))
+  axis(1, at=log(c(0.1, 1, 10, 50, 100, 200, 250)),
+       label=Lab1)
+  axis(2, at=log(c(0.1,1,10,50,100,300)),
+       label=Lab2)
+  box()
+  for (i in 1:100)
+      curve((stanfit$B0[i]+stanfit$delB0[i, j])+
+            ## (stanout$beta1[i]+stanout$be1_re[i, j])*
+            ## (x-(stanout$phi[i]+stanout$phi_re[i, j]))+
+            (stanfit$De[i]+stanfit$delD[i, j])*theta*
+            log1p(exp((x-(stanfit$Ph[i]+stanfit$delP[i, j]))/theta)),
+            col=grey(0.5),add=T)
+  curve((summary(stanout$beta0)$'50%'+
+           summary(stanout$be0)$'50%'[j]) +
+     ##      (beta1_rv_sum$'50%'+be1_re_rv_sum$'50%'[j])*
+            ##      (x-(phi_rv_sum$'50%'+phi_re_rv_sum$'50%'[j]))+
+        (summary(stanout$delta)$'50%'+
+           summary(stanout$det)$'50%'[j])*theta*
+        log1p(exp((x-(summary(stanout$phim)$'50%'+
+                        summary(stanout$phi)$'50%'[j]))/theta)), 
+     add=T)
+  points(log(data$Chla)[sub][temp1],
+         log(data$part_microcystin)[sub][temp1],
+         col="red")
+  invisible()    
+}
+
+allmedianplt <- function(clr=c(rep(1, 9), 4),
+                         lwdth=c(rep(1,9), 3),
+                         stanfit=stanfit_full, sub=temp){
+  stanout <- stanout_rv(stanfit=stanfit)
+  theta <- 0.01*diff(range(log(eriedata$Chla[sub]), na.rm=T))
+  plot(log(part_microcystin) ~ log(Chla), data=eriedata[sub,],
+           ##xlab="Chla ($\\mu$g/L)",
+           ##ylab="MC Concentration ($\\mu$g/L)",
+       xlab=expression(paste("Chla (", mu, gL^{-1}, ")", 
+                             sep="")),
+       ylab=expression(paste("Particulate Microcystin (", 
+                             mu, gL^{-1}, ")",
+                             sep="")), axes=F, col="gray")
+  axis(1, at=log(c(0.1, 1, 10, 50, 100, 200, 250)),
+       label=c(c(0.1, 1, 10, 50, 100, 200, 250)))
+  axis(2, at=log(c(0.1,1,10,50,100,300)),
+       label=c(0.1, 1, 10, 50, 100,300))
+  box()
+  for (j in 1:10)
+    curve((summary(stanout$beta0)$'50%'+
+             summary(stanout$be0)$'50%'[j]) +
+          ##(beta1_rv_sum$'50%'+be1_re_rv_sum$'50%'[j])*
+          ##(x-(phi_rv_sum$'50%'+phi_re_rv_sum$'50%'[j]))+
+          (summary(stanout$delta)$'50%'+
+             summary(stanout$det)$'50%'[j])*theta*
+          log1p(exp((x-(summary(stanout$phim)$'50%'+
+                          summary(stanout$phi)$'50%'[j]))/theta)),
+          col=clr[j], lwd=lwdth[j], add=T)
+    curve(summary(stanout$beta0)$'50%' + #beta1_rv_sum$'50%'*(x-phi_rv_sum$'50%')+
+        summary(stanout$delta)$'50%'*theta*log1p(exp((x-summary(stanout$phim)$'50%')/theta)),
+        add=T, col="red", lwd=3)
+  legend("topleft", legend=c("Overall", "2017"), col=c(2, 4),
+         lwd=3, bty="n")
+  invisible()
+}
+
+save(stanout_rv, plot_full, plotBYyrs, allmedianplt, file="plotting_functions.RData")
+
+## plotting full data model ##
+##############################
+temp <- !is.na(eriedata$part_microcystin) &
+    !is.na(eriedata$Chla) & eriedata$Chla> 0 & 
+    eriedata$part_microcystin > 0
+yrs <- levels(ordered(eriedata$Year[temp]))
+##pdf(file="fitted0_full.pdf", width=5, height=4)
+tikz(file="fitted0_full.tex", width=3, height=2.75, 
+     standAlone=F)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+plot_full()
+dev.off()
+
+## plotting by year
+for (i in 1:length(yrs)){
+  tikz(paste(plotDIR, paste("fitted", to2(i), ".tex", sep=""),
+             sep="/"), width=5, height=4, standAlone=T)
+  par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+  plotBYyrs(j=i)
+  dev.off()
+}
+
+pdf(file="fitted1.pdf", width=5, height=4)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+plotBYyrs(j=1)
+dev.off()
+
+pdf(file="fitted2.pdf", width=5, height=4)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+plotBYyrs(j=2)
+dev.off()
+
+pdf(paste(plotDIR, "mc_chla10.pdf", sep="/"),
+     height=2.5, width=5.5)#, standAlone=T)
+png(file=paste(plotDIR, "mc_chla10yrs.png", sep="/"),
+    width=5.5, height=2.5, unit="in", res=350)
+par(oma=c(2,2,0,0), mfrow=c(2,5), mar=c(0.25,0.25,0.25,0.25),
+    mgp=c(1.25,0.125,0), tck=0.01)
+for (i in 1:10){
+  plotBYyrs(j=i, Xlab="", Ylab="", Lab1=rep("", 7),
+            Lab2=rep("", 6))
+  text(x=log(0.5), y=log(125), yrs[i])
+}
+mtext("Particulate Microcystin", 2, outer=T, line=0.5)
+mtext("Chla Concentration", 1, outer=T, line=0.5)
+dev.off()
+
+## all medians
+##tikz(paste(plotDIR, "mc_chlaAll.tex", sep="/"),
+##     height=2.5, width=3.5, standAlone=F)
+png(fil=paste(plotDIR, "mc_chlaAll.png", sep="/"),
+    height=4.5, width=5.5, unit="in", res=350)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+allmedianplt()
+dev.off()
+```

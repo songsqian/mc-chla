@@ -1,0 +1,204 @@
+---
+title: "Lake Erie Microcystin Risk Assessment -- Other Output"
+author: "Song Qian"
+date: "8/14/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Initial setup
+```{r}
+source("FrontMatter.R")
+load("eriedataClean.RData")
+```
+
+
+```{r}
+## No Scum
+
+load("plotting_functions.RData")
+load("MC_Chla_noscum.RData")
+## fit2keep_noscum <- fit2keep
+print(fit2keep_noscum$fit)
+stanfit_noscum <- extract(fit2keep_noscum$fit)
+## plotting no scum data model ##
+#################################
+
+temp <- !is.na(eriedata$part_microcystin) &
+  !is.na(eriedata$Chla) & eriedata$Chla> 0 & 
+  eriedata$part_microcystin > 0 &
+  eriedata$Sample_Depth!=0
+yrs <- levels(ordered(eriedata$Year[temp]))
+
+##pdf(file="fitted0_noscum.pdf", width=5, height=4)
+tikz(file="fitted0_noscum.tex", width=3, height=2.75, 
+     standAlone=F)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+plot_full(pltdata=eriedata, sub=temp, stanfit=stanfit_noscum)
+dev.off()
+
+pdf(file="fitted_noscum1.pdf", width=5, height=4)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+plotBYyrs(j=1, stanfit=stanfit_noscum)
+dev.off()
+
+pdf(file="fitted_noscum2.pdf", width=5, height=4)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+plotBYyrs(j=2, stanfit=stanfit_noscum)
+dev.off()
+
+pdf(paste(plotDIR, "mc_chla10_noscum.pdf", sep="/"),
+     height=2.5, width=5.5)#, standAlone=T)
+png(file=paste(plotDIR, "mc_chla10yrs.png", sep="/"),
+    width=5.5, height=2.5, unit="in", res=350)
+par(oma=c(2,2,0,0), mfrow=c(2,5), mar=c(0.25,0.25,0.25,0.25),
+    mgp=c(1.25,0.125,0), tck=0.01)
+for (i in 1:10){
+  plotBYyrs(j=i, Xlab="", Ylab="", Lab1=rep("", 7), 
+            Lab2=rep("", 6), stanfit=stanfit_noscum)
+  text(x=log(0.5), y=log(125), yrs[i])
+}
+mtext("Particulate Microcystin", 2, outer=T, line=0.5)
+mtext("Chla Concentration", 1, outer=T, line=0.5)
+dev.off()
+
+## all medians
+tikz(paste(plotDIR, "mc_chlaAll_noscum.tex", sep="/"),
+     height=2.5, width=3.5, standAlone=F)
+##png(fil=paste(plotDIR, "mc_chlaAll_noscum.png", sep="/"),
+##    height=4.5, width=5.5, unit="in", res=350)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+allmedianplt(stanfit=stanfit_noscum)
+dev.off()
+
+## plotting no bottom data model ##
+###################################
+temp <- !is.na(eriedata$part_microcystin) &
+  !is.na(eriedata$Chla) & eriedata$Chla> 0 & 
+  eriedata$part_microcystin > 0 &
+  eriedata$Sample_Depth <= 0.75
+yrs <- levels(ordered(eriedata$Year[temp]))
+
+load("MC_Chla_nobottom.RData")
+## fit2keep_nobottom <- fit2keep
+print(fit2keep_nobottom$fit)
+stanfit_nobottom <- extract(fit2keep_nobottom$fit)
+
+##pdf(file="fitted0_nobottom.pdf", width=5, height=4)
+tikz(file="fitted0_nobottom.tex", width=3, height=2.75, 
+     standAlone=F)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+  plot_full(pltdata=eriedata, sub=temp,
+            stanfit=stanfit_nobottom)
+dev.off()
+
+for (i in 1:length(yrs)){
+  tikz(paste(plotDIR, paste("fitted_nobottom", to2(i), ".tex",
+                            sep=""),
+             sep="/"),width=5, height=4, standAlone=T)
+  par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+  plotBYyrs(j=i, stanfit=stanfit_nobottom)
+  dev.off()
+}
+
+pdf(file="fitted_nobottom1.pdf", width=5, height=4)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+plotBYyrs(j=1, stanfit=stanfit_nobottom)
+dev.off()
+
+pdf(file="fitted_nobottom2.pdf", width=5, height=4)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+plotBYyrs(j=2, stanfit=stanfit_nobottom)
+dev.off()
+
+pdf(paste(plotDIR, "mc_chla10_nobottom.pdf", sep="/"),
+    height=2.5, width=5.5)#, standAlone=T)
+##png(file=paste(plotDIR, "mc_chla10_nobottom.png", sep="/"),
+##    width=5.5, height=2.5, unit="in", res=350)
+par(oma=c(2,2,0,0), mfrow=c(2,5), mar=c(0.25,0.25,0.25,0.25),
+      mgp=c(1.25,0.125,0), tck=0.01)
+for (i in 1:10){
+  plotBYyrs(j=i, Xlab="", Ylab="", Lab1=rep("", 7), 
+            Lab2=rep("", 6), stanfit=stanfit_nobottom)
+  text(x=log(0.5), y=log(125), yrs[i])
+}
+mtext("Particulate Microcystin", 2, outer=T, line=0.5)
+mtext("Chla Concentration", 1, outer=T, line=0.5)
+dev.off()
+
+## all medians
+tikz(paste(plotDIR, "mc_chlaAll_noscum.tex", sep="/"),
+     height=2.5, width=3.5, standAlone=F)
+##  png(fil=paste(plotDIR, "mc_chlaAll_noscum.png", sep="/"),
+##      height=4.5, width=5.5, unit="in", res=350)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+allmedianplt(stanfit=stanfit_nobottom)
+dev.off()
+
+## plotting regular sampling data (0.75) model ##
+#################################################
+temp <- !is.na(eriedata$part_microcystin) &
+  !is.na(eriedata$Chla) & eriedata$Chla> 0 & 
+  eriedata$part_microcystin > 0 &
+  eriedata$Sample_Depth==0.75
+yrs <- levels(ordered(eriedata$Year[temp]))
+load("MC_Chla_075.RData")
+## fit2keep_075 <- fit2keep
+print(fit2keep_075$fit)
+stanfit_075 <- extract(fit2keep_075$fit)
+
+##pdf(file="fitted0_075.pdf", width=5, height=4)
+tikz(file="fitted0_075.tex", width=3, height=2.75, 
+     standAlone=F)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+plot_full(pltdata=eriedata, sub=temp, stanfit=stanfit_075)
+dev.off()
+
+for (i in 1:length(yrs)){
+  tikz(paste(plotDIR, paste("fitted_075", to2(i), ".tex", 
+                            sep=""),
+             sep="/"),width=5, height=4, standAlone=T)
+  par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+  plotBYyrs(j=i, stanfit=stanfit_075)
+  dev.off()
+}
+
+pdf(file="fitted_0751.pdf", width=5, height=4)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+plotBYyrs(j=1, stanfit=stanfit_075)
+dev.off()
+
+pdf(file="fitted_0752.pdf", width=5, height=4)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+plotBYyrs(j=2)
+dev.off()
+
+pdf(paste(plotDIR, "mc_chla10_075.pdf", sep="/"),
+    height=2.5, width=5.5)#, standAlone=T)
+##  png(file=paste(plotDIR, "mc_chla10_075.png", sep="/"),
+##      width=5.5, height=2.5, unit="in", res=350)
+par(oma=c(2,2,0,0), mfrow=c(2,5), mar=c(0.25,0.25,0.25,0.25),
+    mgp=c(1.25,0.125,0), tck=0.01)
+for (i in 1:10){
+  plotBYyrs(j=i, Xlab="", Ylab="", Lab1=rep("", 7), 
+            Lab2=rep("", 6), stanfit=stanfit_075)
+  text(x=log(0.5), y=log(125), yrs[i])
+}
+mtext("Particulate Microcystin", 2, outer=T, line=0.5)
+mtext("Chla Concentration", 1, outer=T, line=0.5)
+dev.off()
+
+clr <- c(rep(1, 9), 4)
+lwdth <- c(rep(1,9), 3)
+## all medians
+tikz(paste(plotDIR, "mc_chlaAll_075.tex", sep="/"),
+     height=2.5, width=3.5, standAlone=F)
+##png(fil=paste(plotDIR, "mc_chlaAll_noscum.png", sep="/"),
+##    height=4.5, width=5.5, unit="in", res=350)
+par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+allmedianplt(stanfit=stanfit_075)
+dev.off()
+
