@@ -1,0 +1,1154 @@
+#+TODO: TODO IN-PROGRESS WAITING DONE
+# -*- mode: org; org-export-babel-evaluate: nil -*-
+#+title: Lake Erie Microcystin Risk Assessment
+#+author: Song S. Qian, Freya Rowland
+#+date: March 5, 2020
+#+OPTIONS: H:4 toc:2 num:2
+#+LaTeX_CLASS: article
+
+* Initial setup
+#+begin_src emacs-lisp :results silent
+  ;;(setq-default inferior-R-program-name "R")        ; unix systems    
+  ;;(setq-default inferior-R-program-name "Rterm")    ; MS Windows, see below for path
+  ;;(setq-default inferior-R-program-name "C:\\Program Files\\R\\R-3.5.3\\bin\\x64\\Rterm.exe")
+    (org-babel-do-load-languages
+     'org-babel-load-languages
+     '((R . t)
+       (latex . t)))
+   (setq org-confirm-babel-evaluate nil)
+
+#+end_src
+
+#+NAME: Setup
+#+BEGIN_SRC R :results value silent
+  packages<-function(x, repos="https://cloud.r-project.org/", ...){
+      x<-as.character(match.call()[[2]])
+      if (!require(x,character.only=TRUE)){
+	  install.packages(pkgs=x, repos=repos, ...)
+	  require(x,character.only=TRUE)
+      }
+  }
+
+  packages(arm)
+  packages(dplyr)
+  packages(lattice)
+  packages(rv)
+  packages(tikzDevice)
+  packages(maptools)
+  packages(maps)
+  packages(mapproj)
+  packages(rpart)
+  ##packages(shinystan)
+
+  base <- getwd()
+  dataDIR <- paste(base, "Data", sep="/")
+  plotDIR <- paste(base, "manuscript", "Figures", sep="/")
+
+  packages(rstan)
+  rstan_options(auto_write = TRUE)
+  options(mc.cores = min(c(parallel::detectCores(), 8)))
+  ## Windows only
+  ##Sys.setenv(LOCAL_CPPFLAGS = '-march=native')
+  nchains <-  min(c(parallel::detectCores(), 8))
+  niters <- 100000
+  nkeep <- 2500
+  nthin <- ceiling((niters/2)*nchains/nkeep)
+
+  to3 <- function(x){
+      ifelse (x < 10, paste("00", x, sep=""),
+	      ifelse(x < 100, paste("0", x, sep=""),
+		     as.character(x)))
+  }
+
+  to2 <- function(x)
+      return(ifelse(x<10, paste("0", x, sep=""), as.character(x)))
+
+  hockey_smooth <- function(x, beta0, beta1=0, delta, phi, theta=NULL)
+  {
+      if (is.null(theta)) theta=0.01*diff(range(x))
+      return(beta0 + beta1 * (x-phi) +
+	     delta * theta * log1p(exp((x-phi)/theta)))
+  }
+
+
+#+END_SRC
+  
+* Plotting BHM results 
+
+#+NAME: BHM_ggplot
+#+BEGIN_SRC R :results output graphics
+  load("eriedataClean.RData")
+
+  ## Exploratory plots
+  eriedata$toxin_chl <- eriedata$part_microcystin/eriedata$Chla
+
+  WE_use <- eriedata %>%
+    filter(part_microcystin >= 0.01)
+
+  # make bins for toxin:chla
+  ratio <- c(0, 0.05, 0.1, 0.15, 0.2, 0.25, Inf)
+  WE_use$ratio <- cut(WE_use$toxin_chl, breaks = ratio)
+
+  WE_use2 <- WE_use %>% filter(!is.na(ratio) & !is.na(Chla)) 
+
+  # separate out the grab and 2008 stations
+  other <- filter(WE_use2, Station2 == "other")
+  regular <- filter(WE_use2, Station2 != "other")
+
+  # plot chla vs. microcystin
+  base <- ggplot(aes(x = Chla, y = part_microcystin), data = regular) +
+    geom_point(aes(fill = ratio),
+	       size = 2,
+	       pch = 21,
+	       alpha = 0.8) +
+    geom_point(
+      aes(x = Chla, y = part_microcystin, fill = ratio),
+      data = other,
+      size = 2,
+      pch = 24,
+      alpha = 0.8) +
+      scale_fill_viridis_d(direction = -1) +
+      scale_y_continuous(trans="log",
+			 breaks=c(0.01,0.1,1,10, 100), 
+			 labels=c("0.01","0.1","1","10", "100"))+
+      scale_x_continuous(trans="log",
+			 breaks=c(0.01,0.1,1,10,100, 1000,10000), 
+			 labels=c("0.01","0.1","1","10","100", "1000","10000")) +
+  #    theme_bw(base_size = 20) +
+      theme(panel.grid.major = element_blank(),
+	    panel.grid.minor = element_blank()) +
+  ##    annotation_logticks(sides = "lb") +
+      ylab("Particulate microcystin ($\\mu$g/L)") +
+      xlab("Chl \\emph{a} ($\\mu$g/L)") +
+      labs(fill = "$\\frac{\\mathrm{Chl\\ \\emph{a}}}{\\mathrm{toxin}}$")
+  tikz(file=paste(plotDIR, "mcVchla.tex", sep="/"),
+       width=6, height=3, standAlone=F)
+  ##print(base+ theme(axis.text=element_text(size=10),
+  ##                  axis.title.x = element_text(size=12),
+  ##                  axis.title.y = element_text(size=12)))
+  print(base+theme_grey(base_size=12))
+  dev.off()
+
+  ## Full data
+  load("MC_Chla.RData")
+  print(fit2keep)
+  stanfit_full <- extract(fit2keep_full$fit)
+
+  ## no scum:
+  load("MC_Chla_noscum.RData")
+  print(fit2keep_noscum$fit)
+  stanfit_noscum <- extract(fit2keep_noscum$fit)
+
+  ## No bottom samples
+  load("MC_Chla_nobottom.RData")
+  print(fit2keep)
+  stanfit_nobottom <- extract(fit2keep)
+
+  ## no scum & no bottom:
+  load("MC_Chla_075.RData")
+  print(fit2keep_075$fit)
+  stanfit_075 <- extract(fit2keep_075$fit)
+
+  ## processing and plotting model results
+  ## stanfit -- output from stan
+  ## stanout -- rv summaries of stanfit
+
+  ### plotting functions
+
+  stanout_rv <- function(stanfit=fit2keep){ ## processing output
+      beta0 <- summary(beta0_rv <- rvsims(stanfit$B0))
+      ##beta1_rv_sum <- summary(rvsims(stanout$B1))
+      delta <- summary(delta_rv <- rvsims(stanfit$De))
+      phim   <- summary(Phi_rv <- rvsims(stanfit$Ph))
+      be0<- summary(be0_rv <- rvsims(stanfit$delB0))
+      ##be1_re_rv_sum<- summary(rvsims(stanout$be1_re))
+      det<- summary(det_rv <- rvsims(stanfit$delD))
+      phi<- summary(phi_rv <- rvsims(stanfit$delP))
+      sigma<- summary(sig_rv <- rvsims(stanfit$sigma))
+      return(list(beta0=beta0, delta=delta, phim=phim,
+		  be0=be0, det=det, phi=phi, sigma=sigma,
+		  beta0RV=beta0_rv, deltaRV=delta_rv, PhiRV=Phi_rv,
+		  be0RV=be0_rv, detRV=det_rv, phiRV=phi_rv, sigRV=sig_rv))
+  }
+
+  plot_full_gg <- function(pltdata=eriedata, sub=NULL,
+			stanfit=stanfit_full){
+      stanout <- stanout_rv(stanfit=stanfit)
+      if (is.null(sub)) sub <- !is.na(pltdata$Chla) & pltdata$Chla > 0
+      pltdata <- pltdata[sub,] %>% dplyr::select(Chla, MC=part_microcystin, Year) %>%
+	  arrange(Chla) %>% filter(MC>0&!is.na(MC))
+      theta <- 0.01*diff(range(log(pltdata$Chla), na.rm=T))
+
+      pltdata <- cbind(pltdata, summary(hockey_smooth(x=log(pltdata$Chla),
+					  beta0=stanout$beta0RV,
+					  delta=stanout$deltaRV,
+					  phi=stanout$PhiRV,
+					  theta=theta) ))
+      names(pltdata)[4:13] <- c("Mean","SD", "X1", "X2.5", "X25", "X50",
+			  "X75", "X97.5", "X99", "Sims")
+      p <- ggplot(pltdata, aes(x=Chla, y=MC)) +
+	  scale_x_continuous(name="Chla ($\\mu$g/L)", trans="log", breaks=c(0.1,1,10,100, 1000, 5000), 
+			 labels=c("0.1","1","10","100", "1000", "5000"))+
+	  scale_y_continuous(name="Microcystin ($\\mu$g/L)", trans="log",
+			     breaks=c(0.01,0.1,1,10,75, 150), 
+			     labels=c("0.01","0.1","1","10","75", "150"))+
+	  geom_point(color="blue") + geom_line(aes(x=Chla, y=exp(Mean)), lwd=2) +
+	  geom_ribbon(aes(x=Chla, ymin=exp(X2.5), ymax=exp(X97.5)), alpha=0.3)
+      return(p)
+  }
+
+  print(plot_full_gg())
+  ## plotting by year
+  plotBYyrs_gg <- function(j=1, Xlab="Chla ($\\mu$g/L)",
+			   Ylab="Particulate Microcystin ($\\mu$g/L)",
+			   Lab1=c(c(0.1, 1, 10, 50, 100, 200, 1000)),
+			   Lab2=c(0.1, 1, 10, 50, 100,300),
+			   data=eriedata, sub=NULL, 
+			   stanfit=stanfit_full){
+      if (is.null(sub)) {
+	  sub <- !is.na(data$Chla) & data$Chla>0
+	  data <- data[sub, ]
+      }
+      stanout <- stanout_rv(stanfit=stanfit)
+      yrs <- levels(ordered(data$Year))
+      temp1 <- data$Year==yrs[j]
+      theta <- 0.01*diff(range(log(data$Chla[sub]), na.rm=T))
+      pltdata <- data %>% select(Chla, MC=part_microcystin, Year) %>%
+	  arrange(Year, Chla) %>%
+	  filter(MC>0 & !is.na(MC))
+      plt_yr <- pltdata %>% filter(Year==yrs[j])
+      p <- ggplot(pltdata, aes(x=Chla, y=MC)) + geom_point(color=grey(0.75)) +
+	  scale_x_continuous(name=Xlab, trans="log", breaks=Lab1, 
+			     labels=as.character(Lab1))+
+	  scale_y_continuous(name=Ylab, trans="log", breaks=Lab2, 
+			     labels=as.character(Lab2) )+
+	  geom_point(data=plt_yr, aes(x=Chla, y=MC), color="red") 
+    
+      plt_yr <- cbind(plt_yr,
+		      summary(hockey_smooth(x=log(plt_yr$Chla),
+					    beta0=stanout$beta0RV+stanout$be0RV[j],
+					    delta=stanout$deltaRV+stanout$detRV[j],
+					    phi=stanout$PhiRV+stanout$phiRV[j],
+					    theta=theta)))
+      names(plt_yr)[4:13] <- c("Mean","SD", "X1", "X2.5", "X25", "X50",
+			       "X75", "X97.5", "X99", "Sims")
+      p <- p + geom_point(data=plt_yr, aes(x=Chla, y=MC), color="red")+
+	  geom_line(data=plt_yr, aes(x=Chla, y=exp(Mean)), lwd=2) +
+	  geom_ribbon(data=plt_yr, aes(x=Chla, ymin=exp(X2.5),
+				       ymax=exp(X97.5)), alpha=0.5)
+      return(p)
+  }
+
+  print(plotBYyrs_gg(j=11))
+
+  plotBYyr_wrap_gg <- function(Xlab="Chla ($\\mu$g/L)",
+			   Ylab="Particulate Microcystin ($\\mu$g/L)",
+			   Lab1=c(c(0.1, 1, 10, 50, 100, 250, 1000)),
+			   Lab2=c(0.1, 1, 10, 50, 200,500),
+			   data=eriedata, sub=NULL, 
+			   stanfit=stanfit_full){
+      if (is.null(sub)) {
+	  sub <- !is.na(data$Chla) & data$Chla>0
+	  data <- data[sub, ]
+      }
+      stanout <- stanout_rv(stanfit=stanfit)
+      yrs <- levels(ordered(data$Year))
+      nyrs <- length(yrs)
+      theta <- 0.01*diff(range(log(data$Chla[sub]), na.rm=T))
+      pltdata <- data %>% select(Chla, MC=part_microcystin, Year) %>%
+	  arrange(Year, Chla) %>%
+	  filter(MC>0 & !is.na(MC))
+      tmp <- rep(1:dim(pltdata)[1], nyrs)
+      pltdata_full <- pltdata[tmp,]
+      pltdata_full$Year <- rep(yrs, each=dim(pltdata)[1])
+      pltdata_full <- cbind(pltdata_full,
+			    summary(hockey_smooth(x=log(pltdata_full$Chla),
+						  beta0=stanout$beta0RV,
+						  delta=stanout$deltaRV,
+						  phi=stanout$PhiRV,
+						  theta=theta)))
+      names(pltdata_full)[4:13] <- c("Mean","SD", "X1", "X2.5", "X25", "X50",
+				   "X75", "X97.5", "X99", "Sims")
+      p <- ggplot(pltdata_full, aes(x=Chla, y=MC)) +
+	  geom_point(color=grey(0.75)) +
+	  geom_line(aes(x=Chla, y=exp(Mean)), color="blue")+
+	  scale_x_continuous(name=Xlab, trans="log", breaks=Lab1, 
+			     labels=as.character(Lab1))+
+	  scale_y_continuous(name=Ylab, trans="log", breaks=Lab2, 
+			     labels=as.character(Lab2))+ facet_wrap(.~Year) +
+	  geom_point(data=pltdata, aes(x=Chla, y=MC), color="red", alpha=0.5)
+      temp <- NULL
+      for (j in 1:nyrs){
+	  plt_yr <- pltdata %>% filter(Year==yrs[j])
+	  plt_yr <- cbind(plt_yr,
+			  summary(hockey_smooth(x=log(plt_yr$Chla),
+						beta0=stanout$beta0RV+stanout$be0RV[j],
+						delta=stanout$deltaRV+stanout$detRV[j],
+						phi=stanout$PhiRV+stanout$phiRV[j],
+						theta=theta)))
+	  names(plt_yr)[4:13] <- c("Mean","SD", "X1", "X2.5", "X25", "X50",
+				   "X75", "X97.5", "X99", "Sims")
+	  temp <- rbind(temp, plt_yr)
+      }
+      p <- p + geom_line(data=temp, aes(x=Chla, y=exp(Mean)))
+      return(p)
+  }
+
+  ## TeX exceeds memory
+  png(file=paste(plotDIR, "all_yrs_wrap.png", sep="/"), width=6.75*120, height=5*120)
+  print(plotBYyr_wrap_gg(Xlab=expression(paste("Chla (", mu, "g/L)", sep="")),
+			 Ylab=expression(paste("Particulate Microcystin (",mu, "g/L)", sep=""))) +
+			     theme(axis.text.x = element_text(hjust = 1, size=5),
+				  axis.text.y = element_text(hjust = 1, size=5)))
+  dev.off()
+
+  allmedianplt_gg <- function(stanfit=stanfit_full, sub=NULL, data=eriedata,
+			      Lab1=c(c(0.1, 1, 10, 50, 100, 250, 1000)),
+			      Lab2=c(0.1, 1, 10, 50, 200,500),
+			      Xlab="Chla ($\\mu$g/L)",
+			      Ylab="Particulate Microcystin ($\\mu$g/L)"){
+      stanout <- stanout_rv(stanfit=stanfit)
+      yrs <- levels(ordered(data$Year))
+      if (!is.null(sub)){
+	  sub <- data$Chla>0 & !is.na(data$Chla)
+	  data <- data[sub,]
+      }
+      pltdata <- data %>% select(Chla, MC=part_microcystin, Year) %>%
+	  arrange (Year, Chla) %>%
+	  filter((MC>0 & !is.na(MC))&(Chla>0)&(!is.na(Chla)))
+      theta <- 0.01*diff(range(log(pltdata$Chla), na.rm=T))
+      p <- ggplot(pltdata, aes(x=Chla, y=MC)) + geom_point(color=grey(0.75)) +
+	  scale_x_continuous(name=Xlab, trans="log", breaks=Lab1, 
+			     labels=as.character(Lab1))+
+	  scale_y_continuous(name=Ylab, trans="log", breaks=Lab2, 
+			     labels=as.character(Lab2) )+
+	  geom_point(aes(x=Chla, y=MC), color="blue")+
+	  geom_line(aes(x=Chla, y=exp(summary(hockey_smooth(x=log(pltdata$Chla),
+						    beta0=stanout$beta0RV,
+						    delta=stanout$deltaRV,
+						    phi=stanout$PhiRV,
+						    theta=theta))$mean)),lwd=2, color="red")
+      for (j in 1:length(yrs)){
+	  plt_yr <- pltdata %>% filter(Year==yrs[j])
+	  plt_yr <- cbind(plt_yr, summary(hockey_smooth(x=log(plt_yr$Chla),
+							beta0=stanout$beta0RV+stanout$be0RV[j],
+							delta=stanout$deltaRV+stanout$detRV[j],
+							phi=stanout$PhiRV+stanout$phiRV[j],
+							theta=theta)))
+	  names(plt_yr)[4:13] <- c("Mean","SD", "X1", "X2.5", "X25", "X50",
+				   "X75", "X97.5", "X99", "Sims")
+	  p <- p + geom_line(data=plt_yr, aes(x=Chla, y=exp(Mean))) ##+
+	      ##geom_ribbon(data=plt_yr, aes(x=Chla, ymin=exp(X2.5), ymax=exp(X97.5)), alpha=0.5)
+      }
+      return(p)
+  }
+
+  tikz(file=paste(plotDIR, "MC_ChlaAll.tex", sep="/"),
+       height=3.75, width=4, standAlone=F)
+  print(allmedianplt_gg())
+  dev.off()
+
+  ###### Done with functions ######
+
+  ##############################
+  ## plotting full data model ##
+  ##############################
+  temp <- !is.na(eriedata$part_microcystin) &
+      !is.na(eriedata$Chla) & eriedata$Chla> 0 & 
+      eriedata$part_microcystin > 0
+  yrs <- levels(ordered(eriedata$Year[temp]))
+  ##pdf(file="fitted0_full.pdf", width=5, height=4)
+  tikz(file=paste(plotDIR, "fitted0_full.tex", sep="/"),
+       width=3, height=2.75, standAlone=F)
+  par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+  plot_full_gg(sub=temp)
+  dev.off()
+
+  ## plotting by year
+  for (i in 1:length(yrs)){
+      tikz(paste(plotDIR, paste("fitted", to2(i), ".tex", sep=""), sep="/"),
+	   width=5, height=4, standAlone=T)
+      par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+      plotBYyrs_gg(j=i)
+      dev.off()
+  }
+
+  pdf(file="fitted1.pdf", width=5, height=4)
+  par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+  plotBYyrs_gg(j=1)
+  dev.off()
+
+
+  pdf(file="fitted2.pdf", width=5, height=4)
+  par(mar=c(3,3,1,1), mgp=c(1.25,0.125,0), tck=0.01)
+  plotBYyrs_gg(j=2)
+  dev.off()
+
+  pdf(paste(plotDIR, "mc_chla10.pdf", sep="/"),
+       height=2.5, width=5.5)#, standAlone=T)
+  png(file=paste(plotDIR, "mc_chla10yrs.png", sep="/"),
+      width=6.5, height=5.5, unit="in", res=350)
+      plotBYyr_wrap_gg()
+  dev.off()
+
+  ## all medians
+  ##tikz(paste(plotDIR, "mc_chlaAll.tex", sep="/"),
+  ##     height=2.5, width=3.5, standAlone=F)
+  png(fil=paste(plotDIR, "mc_chlaAll.png", sep="/"),
+      height=4.5, width=5.5, unit="in", res=350)
+  allmedianplt_gg()
+  dev.off()
+
+
+  ## plotting no scum data model ##
+  #################################
+
+  temp <- !is.na(eriedata$part_microcystin) &
+      !is.na(eriedata$Chla) & eriedata$Chla> 0 & 
+      eriedata$part_microcystin > 0 &
+      eriedata$Sample_Depth!=0
+  yrs <- levels(ordered(eriedata$Year[temp]))
+
+
+  ## plotting no bottom data model ##
+  ###################################
+  temp <- !is.na(eriedata$part_microcystin) &
+      !is.na(eriedata$Chla) & eriedata$Chla> 0 & 
+      eriedata$part_microcystin > 0 &
+      eriedata$Sample_Depth <= 0.75
+  yrs <- levels(ordered(eriedata$Year[temp]))
+
+
+  ## plotting regular sampling data (0.75) model ##
+  #################################################
+  temp <- !is.na(eriedata$part_microcystin) &
+      !is.na(eriedata$Chla) & eriedata$Chla> 0 & 
+      eriedata$part_microcystin > 0 &
+      eriedata$Sample_Depth==0.75
+  yrs <- levels(ordered(eriedata$Year[temp]))
+
+
+  ########################################################################
+  ## probability of exceeding 1, 5, 8, 10, 20 @ chla=10, 30, 50, 100, 200#
+  ## full data model
+
+  xx <- log(c(10, 30, 50, 100, 200))
+  xxmean <- (beta0_rv+be0_re_rv[10])+(delta_rv+det_re_rv[10])*theta*
+	    log1p(exp((xx-(phi_rv+phi_re_rv[10]))/theta))
+  sigma_rv
+  mc_pred <- rvnorm(1, xxmean, sigma_rv)
+  exceed <- rbind(Pr(mc_pred>log(1)),
+		  Pr(mc_pred>log(5)),
+		  Pr(mc_pred>log(8)),
+		  Pr(mc_pred>log(10)),
+		  Pr(mc_pred>log(20)))
+  rownames(exceed) <- c("MC>1", "MC>5","MC>8","MC>10","MC>20")
+  colnames(exceed) <- c("Chla=10", "Chla=30", "Chla=50", "Chla=100", "Chla=500")
+  write.csv(exceed, file="Pr_exceed_pred.csv")
+
+  exceed_mean<- rbind(Pr(xxmean> log(1)),
+		      Pr(xxmean> log(5)),
+		      Pr(xxmean> log(8)),
+		      Pr(xxmean> log(10)),
+		      Pr(xxmean>log(20)))
+  rownames(exceed_mean) <- c("MC>1","MC>5","MC>8", "MC>10","MC>20")
+  colnames(exceed_mean) <- c("Chla=10", "Chla=30", "Chla=50", "Chla=100", "Chla=500")
+  write.csv(exceed_mean, file="Pr_exceed_mean.csv")
+#+END_SRC
+
+The multi-year BHM model: using data up to 2016 to develop priors
+
+* Sub-setting data
+#+NAME: CART
+#+BEGIN_SRC R :results output graphics
+  ## A hockey stick model
+  load("eriedataClean.RData")
+
+  ## Stan model output for all years
+  load("MC_Chla.RData")
+  print(fit2keep_full$fit)
+
+  stanout <- extract(fit2keep_full$fit)  ## same as stanfit_full
+
+  ## hyper-parameters
+  beta0_rv_sum <- summary(beta0_rv <- rvsims(stanout$B0))
+  delta_rv_sum <- summary(delta_rv <- rvsims(stanout$De))
+  phi_rv_sum   <- summary(phi_rv <- rvsims(stanout$Ph))
+
+  ## annual values
+  be0_re_rv_sum<- summary(be0_re_rv <- rvsims(stanout$delB0))
+  det_re_rv_sum<- summary(det_re_rv <- rvsims(stanout$delD))
+  phi_re_rv_sum<- summary(phi_re_rv <- rvsims(stanout$delP))
+  sigma_rv_sum<- summary(sigma_rv <- rvsims(stanout$sigma))
+
+  ## Weekly updating
+  ## creating a subset of data for a given year
+  ## Grouping sampling events (group sample size) to at least n=n_min
+  ## Label each group using the starting date
+  erie_sub <- function(file=eriedata, Yr=2016, n_min = 8,
+		       x="Chla",
+		       y="part_microcystin"){
+      subdata <- file[file$Year==Yr & !is.na(file[,y]),]
+      subdata  <- subdata %>% group_by(Rdate) %>% arrange(Rdate)
+      cs <- cumsum(sz <- table(subdata$Rdate))
+      stepcs <- 0
+      k <- 1
+      gr <- rep(1, length(cs))
+
+      for (i in 1:length(cs)){
+	  if (stepcs >= n_min){
+	      k <- k+1
+	      stepcs <- 0
+	  }
+	  stepcs <- stepcs + sz[i]
+	  gr[i] <- k
+      }
+      subdata$gr <- gr[as.numeric(ordered(subdata$Rdate))]
+      cs_gr <- cumsum(sz_gr <- table(subdata$gr))
+      Rdate_label <- subdata$Rdate[cs_gr]
+      subdata$gr_label <- rep(Rdate_label, sz_gr)  
+      return(subdata)
+  }
+  ## 2018 data
+  erie2018 <- erie_sub(Yr=2018)
+  ##summary(erie2018[,c("Chla", "part_microcystin")])
+  ##xyplot(log(part_microcystin) ~ log(Chla)|Rdate, data=erie2018)
+#+END_SRC
+  
+* Using Sequential Updating of the Hyper-parameters
+
+1) Summarizing model output to derive prior distribution parameters for
+  the next updating:
+
+Model outputs are used for (1) presenting the estimated MC model and
+(2) deriving prior distributions for the next model run.
+
+The derived priors are used for model updating. For simplicity, we
+will assume model parameters are a priori independent of each other
+(an assumption that requires centering the predictor) and a
+normal-inverse-gamma conjugate prior.  That is, for each parameter
+$\theta$ ($=\{ \beta_0, \delta, \phi\}$), we use 
+
+$$ \begin{array}{rcl}
+\theta & \sim & N(\mu_\theta, \sigma_\theta^2)\\
+\mu_\theta | \sigma^2_\theta &\sim& N(\mu^0_{\theta},
+\sigma^2_{\theta}/\lambda_\theta)\\ \sigma^2_\theta &\sim&
+\Gamma^{-1}(\alpha_{\theta}, \beta_{\theta}) \end{array} 
+$$ 
+
+Using the method of moments, we can estimate the prior distribution
+parameter using the MCMC summaries (mean and variance) of each
+parameters. That is, the means and variances of the
+Normal-Inverse-Gamma distribution are: $$
+\begin{array}{ll}
+E(\theta)  = \mu, & Var(\theta) =
+\frac{\beta_{\theta}}{(\alpha_{\theta}-1)\lambda_{\theta}}\\
+E(\sigma^2_{\theta})  = \frac{\beta_{\theta}}{\alpha_{\theta}-1}, &
+Var(\sigma^2_\theta) =
+\frac{\beta_{\theta}^2}{(\alpha_{\theta}-1)^2(\alpha_\theta-2)}
+\end{array}
+$$
+
+Solving for the unknowns:
+$$\begin{align} 
+\mu^0_{\theta} = & E(\theta) &
+\lambda_{\theta} = E(\sigma^2_{\theta})/Var(\theta)\\ \alpha_{\theta}
+= & 2+E^2(\sigma^2_{\theta})/Var(\sigma^2_{\theta}) & \beta_{\theta} =
+E(\sigma^2_{\theta})(\alpha_{\theta}-1) \end{align} $$
+
+Coding Notes:
+
+   - The following code chunk includes functions for (1) extracting
+     prir, (2) the sequential updating Stan model, (3) generating
+     input and initial data files, and (4) subsetting data within a
+     year to generate sequential updating models for every sampling
+     event. 
+   - The normal-inverse-gamma conjugate prior is defined for
+     $\sigma^2$, while Stan and R define a normal distribution using
+     $sigma$.  The prior parameters ($\alpha, \beta$) are derived
+     based on the mean and variance of $\sigma^2$.
+   - Prior parameters were derived using the Stan output after
+     standardization (when used). It is important to separate the fit
+     object and the model coefficient object (the `rv` object). The
+     fit object and its input file should be preserved together.
+   - The following Stan model is written to monitor $\sigma$.
+
+#+NAME: Reading data
+#+BEGIN_SRC R :results value silent
+
+    ## Function to derive prior distribution parameters from a stan out file.
+
+
+    prior <- function(fit, b0="B0", de="De", ph="Ph",
+		      s0="sigma0", sD="sigmaD",sP="sigmaP",
+		      n0=20, setn0=F){
+	## fit: a stan fitted model
+	## setn0: whether to use non-informative prior
+
+	fit2prior <- rvsims(as.matrix(as.data.frame(extract(fit, permute=T))))
+
+	tmp <- summary(fit2prior[names(fit2prior)==b0])
+	Eb0 <- tmp$mean
+	Vb0 <- tmp$sd^2
+
+	tmp <- summary(fit2prior[names(fit2prior)==de])
+	EDe <- tmp$mean
+	VDe <- tmp$sd^2
+
+	tmp <- summary(fit2prior[names(fit2prior)==ph])
+	EPh <- tmp$mean
+	VPh <- tmp$sd^2
+
+	tmp <- summary(fit2prior[names(fit2prior)==s0]^2)
+	Esigma0 <- tmp$mean
+	Vsigma0 <- tmp$sd^2
+
+	tmp <- summary(fit2prior[names(fit2prior)==sD]^2)
+	EsigmaD <- tmp$mean
+	VsigmaD <- tmp$sd^2
+
+	tmp <- summary(fit2prior[names(fit2prior)==sP]^2)
+	EsigmaP <- tmp$mean
+	VsigmaP <- tmp$sd^2
+
+	if (setn0) {
+	    alpha0 <- n0+1
+	    alphaD <- n0+1
+	    alphaP <- n0+1
+	} else {
+	    alpha0 <- 2+Esigma0^2/Vsigma0
+	    alphaD <- 2+Esigma0^2/VsigmaD
+	    alphaP <- 2+Esigma0^2/VsigmaP
+	}
+	beta0 <- Esigma0*(alpha0-1)
+	betaD <- EsigmaD*(alphaD-1)
+	betaP <- EsigmaP*(alphaP-1)
+	lambda0 <- Esigma0/Vb0
+	lambdaD <- EsigmaD/VDe
+	lambdaP <- EsigmaP/VPh
+	## limiting alpha+beta < 1000
+	while (alpha0+beta0 > 1000){
+	  alpha0 <- alpha0/10
+	  beta0 <- beta0/10
+	}
+	while (alphaD+betaD > 1000){
+	  alphaD <- alphaD/10
+	  betaD <- betaD/10
+	}
+	while (alphaP+betaP > 1000){
+	  alphaP <- alphaP/10
+	  betaP <- betaP/10
+	}
+
+	return(list(m0=Eb0,  mD=EDe, mP=EPh,
+		    lmbd0=lambda0, lmbdD=lambdaD, lmbdP=lambdaP,
+		    al0=alpha0, alP=alphaP, alD=alphaD,
+		    bt0=beta0, btP=betaP, btD=betaD))
+    }
+
+  ## Stan model (reporting $\sigma$)
+    stan_model3 <- "
+	      data{
+	      int N; //the number of observations
+	      vector[N] y; //the response
+	      vector[N] x; 
+
+	      real theta;
+	      //real beta1;
+
+	      real m0;
+	      real mD;
+	      real mP;
+
+	      real lmbd0;
+	      real lmbdD;
+	      real lmbdP;
+
+	      real al0;
+	      real alP;
+	      real alD;
+
+	      real bt0;
+	      real btP;
+	      real btD;
+
+	    }
+	    parameters {
+	      real beta0; //the regression parameters
+	      real<lower=0> delta;
+	      real phi; //change point
+
+	      real<lower=0> sigma;
+
+	      real mu0;
+	      real muD;
+	      real muP;
+
+	      real<lower=0> sigma0sq;
+	      real<lower=0> sigmaDsq;
+	      real<lower=0> sigmaPsq;
+	    }
+	    transformed parameters {
+	      real<lower=0> sigma0;
+	      real<lower=0> sigmaD;
+	      real<lower=0> sigmaP;
+	      vector[N] mu;
+
+	      sigma0 = sqrt(sigma0sq);
+	      sigmaD = sqrt(sigmaDsq);
+	      sigmaP = sqrt(sigmaPsq);
+	      for (i in 1:N)
+		mu[i] = beta0 + //beta1 * (x[i]-phi) +
+			delta * theta *
+				log1p(exp((x[i]-phi)/theta));
+	    }
+	    model {  
+	      sigma ~ cauchy(0, 1);
+	      sigma0sq ~ inv_gamma(al0, bt0);
+	      sigmaDsq ~ inv_gamma(alD, btD);
+	      sigmaPsq ~ inv_gamma(alP, btP);
+
+	      mu0 ~ normal(m0, sqrt(sigma0sq/lmbd0));
+	      muD ~ normal(mD, sqrt(sigmaDsq/lmbdD));
+	      muP ~ normal(mP, sqrt(sigmaPsq/lmbdP));
+
+	      phi ~ normal(muP, sigmaP); 
+	      beta0 ~ normal(mu0, sigma0); 
+	      delta ~ normal(muD, sigmaD); 
+
+	      y ~ normal(mu, sigma);
+	    }
+	"
+
+    stan.in <- function(infile, x="Chla", y="part_microcystin",
+			n.chains=nchains, grp=NULL,
+			stdz=T, info=T, prrs = NULL){
+	if (info & is.null(prrs)) stop("Need informative priors")
+	if (!is.null(grp)) infile=infile[grp,]
+	keep <-  (infile[,x] > 0) & (infile[,y] >0)
+	infile <- infile[keep & !is.na(keep),]
+	x <- log(infile[,x])
+	xmu <- mean(x)
+	xsd <- sd(x)
+	if (stdz) x <- (x - xmu)/xsd
+	y <- log(infile[,y])
+	n <- dim(infile)[1]
+	if (info){
+	    m0 = prrs$m0
+	    mD = prrs$mD
+	    mP = prrs$mP
+	    lmbd0=prrs$lmbd0
+	    lmbdD=prrs$lmbdD
+	    lmbdP=prrs$lmbdP
+	    al0=prrs$al0
+	    alP=prrs$alP
+	    alD=prrs$alD
+	    bt0=prrs$bt0
+	    btP=prrs$btP
+	    btD=prrs$btD
+	}else{
+	    m0 = 0
+	    mD = 0
+	    mP = 0
+	    lmbd0=1
+	    lmbdD=1
+	    lmbdP=1
+	    al0=2
+	    alP=2
+	    alD=2
+	    bt0=2
+	    btP=2
+	    btD=2
+	}
+
+	s0 <- sqrt(bt0/(al0-1))
+	sD <- sqrt(btD/(alD-1))
+	sP <- sqrt(btP/(alP-1))
+
+	inits <- list()
+	if (stdz) theta <- 0.04
+	else theta <- 0.01*diff(range(x))
+	bugs.data <- list(N=n, y=y, x=x,
+			  theta=theta, #beta1=0,
+			  m0 = m0,  mD = mD, mP = mP,
+			  lmbd0=lmbd0, lmbdD=lmbdD, lmbdP=lmbdP,
+			  al0=al0, alP=alP, alD=alD,
+			  bt0=bt0, btP=btP, btD=btD )
+	for (i in 1:n.chains)
+	    inits[[i]] <- list(beta0=rnorm(1, m0, s0), 
+			       delta=abs(rnorm(1,mD,sD)),
+			       phi=runif(1, range(x)[1], range(x)[2]),
+			       sigma=runif(1), sigmaPsq=runif(1), sigmaDsq=runif(1),
+			       sigma0sq=runif(1), 
+			       mu0=rnorm(1, m0,s0), 
+			       muD=abs(rnorm(1, mD,sD)),
+			       muP=rnorm(1, mP,sP))
+	para <- c("beta0", "delta", "phi","sigma",
+		  "mu0", "muD","muP", "sigmaP","sigma0", "sigmaD")
+	return(list(para=para, data=bugs.data,
+		    inits=inits,n.chains=n.chains,
+		    mux=xmu, sdx=xsd, theta=theta))
+    }
+
+
+  oneYRfit <- function(Year=2018, STD=F, stan_model_compiled,
+		       prior_fit=fit2keep){
+      subdata <- erie_sub(Yr=Year)
+      fitcoef1 <- fitcoef2 <- list()
+      prr <- prior(prior_fit, b0="B0", de="De", ph="Ph",
+		   s0="sigma0", sD="sigmaD", sP="sigmaP")
+      gr <- subdata$gr
+      for (i in 1:max(gr)){
+	  print(paste(i, "of", max(gr), "Year = ", Year))
+	  ##      if (i >1)
+	  ##      prr <- prior(fit3, b0="mu0", de="muD", ph="muP")
+	  tmp <- subdata$gr <= i
+	  input.to.stan <- stan.in(infile=subdata[tmp,], info=T, prrs=prr,
+				   stdz=STD, n.chains=nchains)
+	  muxC <- input.to.stan$mux
+	  sdxC <- input.to.stan$sdx
+	  thetaC <- input.to.stan$data$theta
+
+	  fit3 <- sampling(stan_model_compiled,
+			   data = input.to.stan$data, init=input.to.stan$inits,
+			   pars = input.to.stan$para,
+			   iter=niters, thin=nthin,
+			   chains=input.to.stan$n.chains, 
+			   control=list(adapt_delta=0.99, max_treedepth=20))
+	  print(fit3)
+	  fitcoef1[[i]] <-
+	      rvsims(as.matrix(as.data.frame(extract(fit3, permute=T))))
+	  if (STD){
+	      fitcoef1[[i]]$delta <- fitcoef1[[i]]$delta/sdxC
+	      ##fitcoef1[[i]]$beta1 <- fitcoef1[[i]]$beta1/sdxC
+	      fitcoef1[[i]]$phi <- muxC + fitcoef1[[i]]$phi*sdxC
+	  }
+      }
+      save(fitcoef1, file=paste("MC_CHLA_",Year, ".RData", sep=""))
+      ## fitting with incremental data
+      prr <- prior(prior_fit, b0="B0", de="De", ph="Ph",
+		   s0="sigma0", sD="sigmaD", sP="sigmaP")
+      gr <- subdata$gr
+      for (i in 1:max(gr)){
+	  print(paste(i, "of", max(gr), "(incremental)"))
+	  if (i >1)
+	      prr <- prior(fit3_inc, b0="mu0", de="muD", ph="muP")
+	  tmp <- subdata$gr == i
+	  input.to.stan <- stan.in(infile=subdata[tmp,], info=T, prrs=prr,
+				   stdz=STD, n.chains=nchains)
+	  muxC <- input.to.stan$mux
+	  sdxC <- input.to.stan$sdx
+	  thetaC <- input.to.stan$data$theta
+
+	  fit3_inc<- sampling(stan_model_compiled,
+			      data = input.to.stan$data, init=input.to.stan$inits,
+			      pars = input.to.stan$para,
+			      iter=niters, thin=nthin,
+			      chains=input.to.stan$n.chains, 
+			      control=list(adapt_delta=0.99, max_treedepth=20))
+	  print(fit3_inc)
+	  fitcoef2[[i]] <-
+	      rvsims(as.matrix(as.data.frame(extract(fit3_inc, permute=T))))
+	  if (STD){
+	      fitcoef2[[i]]$delta <- fitcoef2[[i]]$delta/sdxC
+	      ##fitcoef2[[i]]$beta1 <- fitcoef2[[i]]$beta1/sdxC
+	      fitcoef2[[i]]$phi <- muxC + fitcoef2[[i]]$phi*sdxC
+	  }
+      }
+      save(fitcoef2, file=paste("MC_CHLA_", Year, "_inc.RData", sep=""))
+      invisible()
+  }
+
+  seq_mod <- stan_model(model_code = stan_model3)
+  ## 2018
+  oneYRfit(stan_model_compiled=seq_mod)
+  ## 2017
+  oneYRfit(Year=2017, stan_model_compiled=seq_mod)
+  ## 2016
+  oneYRfit(Year=2016, stan_model_compiled=seq_mod)
+  ## 2015
+  oneYRfit(Year=2015, stan_model_compiled=seq_mod)
+  ## 2014
+  oneYRfit(Year=2014, stan_model_compiled=seq_mod)
+  ## All years
+  for (yr in 2012:2013) oneYRfit(Year=yr, stan_model_compiled=seq_mod)
+
+#+END_SRC
+
+* Presenting Fitted Models
+
+#+NAME: Plotting
+#+BEGIN_SRC R :results value silent
+
+  ## R functionm for plotting by time step
+
+    plotBYwks <- function(j=1, Xlab="Chla ($\\mu$g/L)",
+			  Ylab="Particulate Microcystin ($\\mu$g/L)",
+			  Lab1=c(c(0.1, 1, 10, 50, 100, 200, 250)),
+			  Lab2=c(0.1, 1, 10, 50, 100,300)){
+	temp1 <- erie2018$gr==j
+	theta <- 0.01*diff(range(log(erie2018$Chla), na.rm=T))
+	plot(log(part_microcystin) ~ log(Chla), data=erie2018,
+	     xlab=Xlab, ylab=Ylab, axes=F, col=grey(0.75))
+	axis(1, at=log(c(0.1, 1, 10, 50, 100, 200, 250)),
+	     label=Lab1)
+	axis(2, at=log(c(0.1,1,10,50,100,300)),
+	     label=Lab2)
+	box()
+	for (i in 1:100)
+	    curve((stanout$B0[i]+stanout$delB0[i, j])+
+		  (stanout$De[i]+stanout$delD[i, j])*theta*
+		  log1p(exp((x-(stanout$Ph[i]+stanout$delP[i, j]))/theta)),
+		  col=grey(0.5),add=T)
+	curve((beta0_rv_sum$'50%'+be0_re_rv_sum$'50%'[j]) +
+	      (delta_rv_sum$'50%'+det_re_rv_sum$'50%'[j])*theta*
+	      log1p(exp((x-(phi_rv_sum$'50%'+phi_re_rv_sum$'50%'[j]))/theta)),
+	      add=T)
+	points(log(erie2019$Chla)[temp1],
+	       log(erie2018$part_microcystin)[temp1],
+	       col="red")
+	invisible()    
+    }
+
+  ## GGplot strategy:
+  ## 1. Repeat the original data grps times to produce facet data frame
+  ## 2. Label each group by their beginning date
+  ## 3. Create a second stacked data with only Year's data
+  ## 4. Create a third stacked data frame with (incremental) group data
+
+  annual_figures_gg <- function(Year=2016,  dataAll=eriedata, PDF=F, TeX=F,
+				Xlab="Chla Concentration ($\\mu$g/L)",
+				Ylab="MC Concentration ($\\mu$g/L)",
+				Lab1=c(0.1, 1, 50, 500, 5000),
+				Lab2=c(0.01,0.1,1,50,500)){
+      load(paste("MC_CHLA_",Year, ".RData", sep=""))
+      load(paste("MC_CHLA_", Year, "_inc.RData", sep=""))
+      model_coef1 <- fitcoef1  ## cumulative
+      model_coef2 <- fitcoef2  ## incremental
+      plot_full <- dataAll %>% select(Chla, part_microcystin, Year, Rdate) %>%
+	  filter(Chla>0 & !is.na(Chla) & part_microcystin>0 &
+		 !is.na(part_microcystin)) 
+      subdata <- erie_sub(Yr=Year) %>%
+	  select(Chla, part_microcystin, gr, gr_label, Year, Rdate) %>%
+	  filter(Chla>0 & !is.na(Chla) & part_microcystin>0 &
+		 !is.na(part_microcystin))
+      gr_label <- unique(subdata$gr_label)
+      print(gr_label)
+      grps <- max(subdata$gr)
+      gr_rows <- ceiling(grps/5)
+      rep_full <- rep(1:dim(plot_full)[1], grps)
+      rep_yr <- rep(1:dim(subdata)[1], grps)
+      temp <- cumsum(table(subdata$gr))
+      rep_cum <- NULL
+      for (i in 1:grps) rep_cum <- c(rep_cum, 1:temp[i])
+      plot_full_gg <- plot_full[rep_full,]
+      plot_full_gg$gr_name <- rep(gr_label, each = dim(plot_full)[1])
+      plot_yr_gg <- subdata[rep_yr,]
+      plot_yr_gg$gr_name <- rep(gr_label, each = dim(subdata)[1])
+
+      plot_cum_gg <- subdata[rep_cum,]
+      plot_cum_gg$gr_name <- rep(gr_label, temp)
+      plot_cum_gg$gr_name_or <- as.numeric(ordered(plot_cum_gg$gr_name))
+
+      yy1 <- NULL
+      for (i in 1:grps){
+	  tmp <- plot_cum_gg$gr_name_or==i
+	  temp_data <- plot_cum_gg[tmp,]
+	  yy1 <- rbind(yy1, summary(hockey_smooth(x=log(temp_data$Chla),
+						  beta0=model_coef1[[i]][1],
+						  delta=model_coef1[[i]][2],
+						  phi=model_coef1[[i]][3])))
+      }
+      names(yy1) <- c("Mean", "SD", "X1", "X2.5", "X25", "X50", "X75", "X97.5",
+		      "X99", "sims")
+      yy1$Chla  <- plot_cum_gg$Chla
+      yy1$gr_name <- plot_cum_gg$gr_name
+      yy2 <- NULL
+      for (i in 1:grps){
+	  tmp <- plot_cum_gg$gr_name_or==i
+	  temp_data <- plot_cum_gg[tmp,]
+	  yy2 <- rbind(yy2, summary(hockey_smooth(x=log(temp_data$Chla),
+						  beta0=model_coef1[[i]][5],
+						  delta=model_coef1[[i]][6],
+						  phi=model_coef1[[i]][7])))
+      }
+      names(yy2) <- c("Mean", "SD", "X1", "X2.5", "X25", "X50", "X75", "X97.5",
+		      "X99", "sims")
+      yy2$Chla  <- plot_cum_gg$Chla
+      yy2$gr_name <- plot_cum_gg$gr_name
+    
+      p <- ggplot(data=plot_full_gg, aes(x=Chla, y=part_microcystin)) +
+	  geom_point(color=grey(0.75)) +
+	  scale_x_continuous(name=Xlab, trans="log", breaks=Lab1,
+			     labels=as.character(Lab1))+
+	  scale_y_continuous(name=Ylab, trans="log", breaks=Lab2,
+			     labels=as.character(Lab2))+
+	  facet_wrap(.~gr_name, nrow=gr_rows)
+      p <- p + geom_point(data=plot_yr_gg, color=grey(0.5))
+      p <- p + geom_point(data=plot_cum_gg, color="red") +
+	  geom_line(data=as.data.frame(yy1), aes(x=Chla, y=exp(Mean)))
+      p <- p + geom_line(data = as.data.frame(yy2),
+			 aes(x=Chla, y=exp(Mean)), color="blue")
+      if (!PDF & !TeX) par(ask=F)
+      if (PDF){
+	  pdf(file=paste(plotDIR, paste("erie", Year, ".pdf", sep=""), sep="/"), 
+	      height=gr_rows*2, width=7.75)
+      }else if (TeX){
+	  tikz(file=paste(plotDIR, paste("erie", Year, ".tex", sep=""), sep="/"), 
+	       height=gr_rows*2, width=7.75, standAlone=F)
+      }
+      print(p+theme(axis.text.x = element_text(hjust = 1, size=7),
+		    axis.text.y = element_text(hjust = 1, size=7),
+		    aspect.ratio=1))
+      if (PDF | TeX)
+	  dev.off()
+
+      yy1 <- NULL
+      for (i in 1:grps){
+	  tmp <- subdata$gr==i
+	  temp_data <- subdata[tmp,]
+	  yy1 <- rbind(yy1, summary(hockey_smooth(x=log(temp_data$Chla),
+						  beta0=model_coef2[[i]][1],
+				      delta=model_coef2[[i]][2],
+				      phi=model_coef2[[i]][3])))
+      }
+      names(yy1) <- c("Mean", "SD", "X1", "X2.5", "X25", "X50", "X75", "X97.5",
+		      "X99", "sims")
+      yy1$Chla  <- subdata$Chla
+      yy1$gr_name <- subdata$gr_label
+      yy2 <- NULL
+      for (i in 1:grps){
+	  tmp <- subdata$gr==i
+	  temp_data <- subdata[tmp,]
+	  yy2 <- rbind(yy2, summary(hockey_smooth(x=log(temp_data$Chla),
+						  beta0=model_coef2[[i]][5],
+						  delta=model_coef2[[i]][6],
+						  phi=model_coef2[[i]][7])))
+      }
+      names(yy2) <- c("Mean", "SD", "X1", "X2.5", "X25", "X50", "X75",
+		      "X97.5", "X99", "sims")
+      yy2$Chla  <- subdata$Chla
+      yy2$gr_name <- subdata$gr_label
+
+      pp <- ggplot(data=plot_full_gg, aes(x=Chla, y=part_microcystin)) +
+	  geom_point(color=grey(0.75)) +
+	  scale_x_continuous(name=Xlab, trans="log", breaks=Lab1,
+			     labels=as.character(Lab1))+
+	  scale_y_continuous(name=Ylab, trans="log", breaks=Lab2,
+			     labels=as.character(Lab2))+
+	  facet_wrap(.~gr_name, nrow=gr_rows)
+      pp <- pp + geom_point(data=plot_yr_gg, color=grey(0.5))
+      subdata$gr_name <- subdata$gr_label
+      pp <- pp + geom_point(data=subdata, color="red") +
+	  geom_line(data=as.data.frame(yy1), aes(x=Chla, y=exp(Mean)))
+      pp <- pp + geom_line(data = as.data.frame(yy2),
+			   aes(x=Chla, y=exp(Mean)), color="blue")
+
+      if (PDF){
+	  pdf(file=paste(plotDIR, paste("erie", Year, "_inc.pdf", sep=""),
+			 sep="/"), 
+	      height=gr_rows*2, width=7.75)
+      }else if (TeX){
+	  tikz(file=paste(plotDIR, paste("erie", Year, "_inc.tex", sep=""),
+			  sep="/"), 
+	       height=gr_rows*2, width=7.75, standAlone=F)
+      } 
+
+      print(pp+theme(axis.text.x = element_text(hjust = 1, size=7),
+		     axis.text.y = element_text(hjust = 1, size=7),
+		     aspect.ratio=1))
+      if(PDF | TeX) dev.off()
+      invisible()
+  }
+
+  for (yr in 2012:2018)
+      annual_figures_gg(Year=yr, dataAll = eriedata, PDF=F, TeX=T)
+
+  for (yr in 2012:2018)
+      annual_figures_gg (Year=yr, dataAll=eriedata,
+			 Xlab=expression(paste("Chla Concentration (", mu, "g/L)", sep="")),
+			 Ylab=expression(paste("MC Concentration (", mu, "g/L)", sep="")),
+			 PDF=T, TeX=F)
+#+END_SRC
+
+* Risk Forecasting
+#+NAME: forecasting
+#+BEGIN_SRC R :results value silent
+  ## R functionm for plotting forecasted MC (oncentration plus probability)
+
+
+  mc_chla_for_gg <- function(Year=2018,  dataAll=eriedata, PDF=F, TeX=F,
+                             cr=c(1, 8, 20), Lab1=c(0.1, 1, 50, 500, 5000),
+                             Lab2=c(0.01,0.1,1,5,500),
+                             Xlab= "Chla Concentration ($\\mu$g/L)",
+                             Ylab= "MC Concentration ($\\mu$g/L)"){
+      load(paste("MC_CHLA_",Year, ".RData", sep=""))
+      load(paste("MC_CHLA_", Year, "_inc.RData", sep=""))
+      model_coef1 <- fitcoef1
+      model_coef2 <- fitcoef2
+      subdata <- erie_sub(file=dataAll, Yr=Year)%>% select(Chla, part_microcystin, gr, gr_label, Rdate) %>%
+          filter(Chla > 0 & !is.na(Chla) & part_microcystin > 0 & !is.na(part_microcystin)) %>%
+          arrange(Rdate)
+      grps <- max(subdata$gr)
+      gr_rows <- ceiling((grps-2)/5)
+
+      Xlim_sub <- log(range(subdata$Chla))
+      Ylim_sub <- log(range(subdata$part_microcystin))
+
+      ## print(summary(dataAll$Chla))
+      xx <- seq(Xlim_sub[1], Xlim_sub[2], length=50)
+      yy <- NULL
+      for (i in 2:(grps-1)){
+          y_mu <- hockey_smooth(x=xx, beta0=model_coef1[[i-1]][1],
+                                      delta=model_coef1[[i-1]][2],
+                                      phi=model_coef1[[i-1]][3])
+          y_sigma  <- model_coef1[[i-1]][4]
+          yy_rep <- rvnorm(1, y_mu, y_sigma)
+          yy_mu_sum <- summary(y_mu)
+          yy_mu_sum$Pr1 <- diff(Ylim_sub)*Pr(yy_rep >= log(cr[1])) + Ylim_sub[1]
+          yy_mu_sum$Pr2 <- diff(Ylim_sub)*Pr(yy_rep >= log(cr[2])) + Ylim_sub[1]
+          yy_mu_sum$Pr3 <- diff(Ylim_sub)*Pr(yy_rep >= log(cr[3])) + Ylim_sub[1]
+        
+          yy  <- rbind(yy, yy_mu_sum)
+      }
+      names(yy) <- c("Mean","SD","X1","X2.5","X25","X50","X75","X97.5","X99", "sims","Pr1","Pr2","Pr3")
+      yy$Chla <- rep((xx), grps-2)
+      yy$gr_label <- rep(unique(subdata$gr_label)[-c(1, grps)], each=50)
+      tmp <- subdata$gr>1 & subdata$gr<grps
+      p <- ggplot(data=subdata[tmp,], aes(x=log(Chla), y=log(part_microcystin))) +
+          geom_point(color="red") + facet_wrap(.~gr_label, nrow=gr_rows)+
+          scale_x_continuous(name=Xlab, breaks=log(Lab1), labels=as.character(Lab1))+
+          scale_y_continuous(name=Ylab, breaks=log(Lab2), labels=as.character(Lab2),
+                              sec.axis = sec_axis( trans=~(.- Ylim_sub[1])/diff(Ylim_sub), name="Exceedance Probability"))
+
+      p <- p + geom_line(data=yy, aes(x=Chla, y=(Mean))) +
+          geom_line(data=yy, aes(x=Chla, y=Pr1), linetype="dashed")+
+          geom_line(data=yy, aes(x=Chla, y=Pr2), linetype="dotdash")+
+          geom_line(data=yy, aes(x=Chla, y=Pr3), linetype="dotted")+
+          geom_ribbon(data=yy, aes(x=Chla, y=(Mean),  ymin=(X2.5), ymax=(X97.5)), alpha=0.3)
+
+      if (PDF){
+          pdf(file=paste(plotDIR, paste("erie", Year, "_prob.pdf", sep=""), sep="/"), 
+              height=gr_rows*2, width=7.75)
+      }else if (TeX){
+          tikz(file=paste(plotDIR, paste("erie", Year, "_prob.tex", sep=""), sep="/"), 
+               height=gr_rows*2, width=7.75, standAlone=F)
+      }
+
+      print(p)
+
+      if (PDF | TeX) dev.off()
+      invisible()
+  }
+
+  mc_chla_for_gg(Year=2017, cr=c(1, 8, 20), Lab1=c(0.1, 5, 50, 250, 1000), Lab2=c(1, 8, 20, 100), PDF=T,
+                 Xlab= expression(paste("Chla Concentration (", mu, "g/L)", sep="")),
+                 Ylab= expression(paste("MC Concentration (", mu, "g/L)", sep="")))
+  mc_chla_for_gg(Year=2018, cr=c(1, 5, 8), Lab1=c(0.1, 5, 20, 50), PDF=T,
+                 Xlab= expression(paste("Chla Concentration (", mu, "g/L)", sep="")),
+                 Ylab= expression(paste("MC Concentration (", mu, "g/L)", sep="")))
+
+  mc_chla_for_gg(Year=2017, cr=c(1, 8, 20), Lab1=c(0.1, 5, 50, 250, 1000), Lab2=c(1, 8, 20, 100), TeX=T)
+  mc_chla_for_gg(Year=2018, cr=c(1, 5, 8), Lab1=c(0.1, 5, 20, 50), TeX=T)
+
+#+END_SRC
