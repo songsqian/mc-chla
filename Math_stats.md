@@ -3,6 +3,7 @@
 ## Smoothed Hockey-stick Model
 
 The piecewise linear model is computationally unstable because of the discontinuity in the model's first derivative Qian and Richardson (1997). The discontinuous first-order derivative
+
 $$
 \frac{dy}{dx}=\begin{cases} \beta_0 & \text{when } \log(Chla) \leq
   \phi\\ \beta_1 &\text{when } \log(Chla) > \phi \end{cases}
@@ -24,6 +25,7 @@ If the change point version of the hockey stick model is a "broken" stick model,
 ## Temperature Effect
 
 Because $MC$ is a biological product, its concentration is likely affected by temperature. The temperature effect can be included by adding a linear term to the hockey stick model:
+
 $$
 \log(MC) = \beta_0+\beta_1(\log(Chla)-\phi) +
 (\beta_1-\beta_0)\lambda\log\left
