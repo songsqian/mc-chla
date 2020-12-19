@@ -34,7 +34,7 @@ xyplot(log(part_microcystin) ~ Surf_Temp|Month, data=eriedata,
 
 par(mar=c(3, 3, 0.75, 0.25), mgp=c(1.25, 0.125, 0), las=1, 
     tck=0.01)
-plot(log(part_microcystin) ~ log(POC), data=eriedata[temp,],
+plot(log(part_microcystin) ~ log(POC), data=eriedata,
      xlab="POC (mg/L)", subset=part_microcystin>0 & POC>0,
      ylab="MC Concentration ($\\mu$g/L)", axes=F)
 axis(1, at=log(c(0.1, 1, 10, 50, 100, 200, 250)),

@@ -29,8 +29,10 @@ temp <- !is.na(eriedata$part_microcystin) &
   !is.na(eriedata$Chla) & eriedata$Chla> 0 & 
   eriedata$part_microcystin > 0
 fit2keep_full <- running_fun(Data=eriedata[temp,])
-save(fit2keep_full, file="MC_Chla.RData")
+
+save(fit2keep_full, file="MC_ChlaCens.RData")
 ## load("MC_Chla.RData")
+## load("MC_ChlaCens.RData")
 print(fit2keep_full$fit)
 stanfit_full <- extract(fit2keep_full$fit)
 ```
