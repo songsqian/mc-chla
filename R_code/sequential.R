@@ -87,6 +87,7 @@ prior <- function(fitrv, b0="B0", de="De", ph="Ph",
 
 
 ## Stan model (reporting $\sigma$)
+### without censored data
 stan_model3 <- "
 	      data{
 	      int N; //the number of observations
@@ -159,6 +160,166 @@ stan_model3 <- "
 	    }
 "
 
+### with censored data
+stan_model3_cens <- "
+	      data{
+	      int N; //number of uncensored observations
+              int Ncens;
+	      vector[N] y; //the response
+	      vector[Ncens] ycens; //the response
+	      vector[N] x;
+	      vector[Ncens] xcens;
+
+	      real theta;
+	      //real beta1;
+
+	      real m0;
+	      real mD;
+	      real mP;
+
+	      real lmbd0;
+	      real lmbdD;
+	      real lmbdP;
+
+	      real al0;
+	      real alP;
+	      real alD;
+
+	      real bt0;
+	      real btP;
+	      real btD;
+
+	    }
+	    parameters {
+	      real beta0; //the regression parameters
+	      real<lower=0> delta;
+	      real phi; //change point
+
+	      real<lower=0> sigma;
+
+	      real mu0;
+	      real muD;
+	      real muP;
+
+	      real<lower=0> sigma0sq;
+	      real<lower=0> sigmaDsq;
+	      real<lower=0> sigmaPsq;
+	    }
+	    transformed parameters {
+	      real<lower=0> sigma0;
+	      real<lower=0> sigmaD;
+	      real<lower=0> sigmaP;
+	      vector[N] mu;
+	      vector[Ncens] mucens;
+
+	      sigma0 = sqrt(sigma0sq);
+	      sigmaD = sqrt(sigmaDsq);
+	      sigmaP = sqrt(sigmaPsq);
+	      for (i in 1:N)
+		mu[i] = beta0 + //beta1 * (x[i]-phi) +
+                        delta * theta * log1p(exp((x[i]-phi)/theta));
+       	      for (i in 1:Ncens)
+		mucens[i] = beta0 + //beta1 * (xcens[i]-phi) +
+                        delta * theta * log1p(exp((xcens[i]-phi)/theta));
+
+	    }
+	    model {
+	      sigma ~ cauchy(0, 1);
+	      sigma0sq ~ inv_gamma(al0, bt0);
+	      sigmaDsq ~ inv_gamma(alD, btD);
+	      sigmaPsq ~ inv_gamma(alP, btP);
+
+	      mu0 ~ normal(m0, sqrt(sigma0sq/lmbd0));
+	      muD ~ normal(mD, sqrt(sigmaDsq/lmbdD));
+	      muP ~ normal(mP, sqrt(sigmaPsq/lmbdP));
+
+	      phi ~ normal(muP, sigmaP);
+	      beta0 ~ normal(mu0, sigma0);
+	      delta ~ normal(muD, sigmaD);
+
+              target += normal_lpdf(y | mu, sigma);
+              target += normal_lcdf(ycens | mucens, sigma);
+   }
+"
+
+stan.in_cens <- function(infile, x="Chla", y="part_microcystin",
+              			n.chains=nchains, grp=NULL,
+			              stdz=T, info=T, prrs = NULL){
+	if (info & is.null(prrs)) stop("Need informative priors")
+	if (!is.null(grp)) infile=infile[grp,]
+	keep <-  (infile[,x] > 0) & (infile[,y] >0)
+	infile <- infile[keep & !is.na(keep),]
+        cens <- infile$part_microcystin<=0.01
+        ncens <- sum(cens)
+	n <- dim(infile)[1]-ncens
+        xtemp <- infile[,x]
+	y <- log(infile[!cens,y])
+        ycens <- rep(log(0.01), ncens)
+	x <- log(xtemp[!cens])
+        xcens <- log(xtemp[cens])
+	xmu <- mean(x)
+	xsd <- sd(x)
+	if (stdz) x <- (x - xmu)/xsd
+	y <- log(infile[,y])
+	if (info){
+	    m0 = prrs$m0
+	    mD = prrs$mD
+	    mP = prrs$mP
+	    lmbd0=prrs$lmbd0
+	    lmbdD=prrs$lmbdD
+	    lmbdP=prrs$lmbdP
+	    al0=prrs$al0
+	    alP=prrs$alP
+	    alD=prrs$alD
+	    bt0=prrs$bt0
+	    btP=prrs$btP
+	    btD=prrs$btD
+	}else{
+	    m0 = 0
+	    mD = 0
+	    mP = 0
+	    lmbd0=1
+	    lmbdD=1
+	    lmbdP=1
+	    al0=2
+	    alP=2
+	    alD=2
+	    bt0=2
+	    btP=2
+	    btD=2
+	}
+
+	s0 <- sqrt(bt0/(al0-1))
+	sD <- sqrt(btD/(alD-1))
+	sP <- sqrt(btP/(alP-1))
+
+	inits <- list()
+	if (stdz) theta <- 0.04
+	else theta <- 0.01*diff(range(x))
+	bugs.data <- list(N=n, Ncens=ncens, y=y,
+                          ycens=ycens, x=x, xcens=xcens,
+			  theta=theta, #beta1=0,
+			  m0 = m0,  mD = mD, mP = mP,
+			  lmbd0=lmbd0, lmbdD=lmbdD, lmbdP=lmbdP,
+			  al0=al0, alP=alP, alD=alD,
+			  bt0=bt0, btP=btP, btD=btD )
+	for (i in 1:n.chains)
+	    inits[[i]] <- list(beta0=rnorm(1, m0, s0),
+			       delta=abs(rnorm(1,mD,sD)),
+			       phi=runif(1, range(x)[1], range(x)[2]),
+			       sigma=runif(1), sigmaPsq=runif(1),
+			       sigmaDsq=runif(1),
+			       sigma0sq=runif(1),
+			       mu0=rnorm(1, m0,s0),
+			       muD=abs(rnorm(1, mD,sD)),
+			       muP=rnorm(1, mP,sP))
+	para <- c("beta0", "delta", "phi","sigma",
+		        "mu0", "muD","muP", "sigmaP","sigma0", "sigmaD")
+	return(list(para=para, data=bugs.data,
+		          inits=inits,n.chains=n.chains,
+		          mux=xmu, sdx=xsd, theta=theta))
+}
+
 stan.in <- function(infile, x="Chla", y="part_microcystin",
               			n.chains=nchains, grp=NULL,
 			              stdz=T, info=T, prrs = NULL){
@@ -229,4 +390,3 @@ stan.in <- function(infile, x="Chla", y="part_microcystin",
 		          inits=inits,n.chains=n.chains,
 		          mux=xmu, sdx=xsd, theta=theta))
 }
-
