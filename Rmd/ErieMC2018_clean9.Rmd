@@ -76,7 +76,8 @@ stanfit_full <- extract(fit2keep_full$fit)
 
 prrs <- rvsims(as.matrix(as.data.frame(stanfit_full))) 
 
-oneYRfit <- function(Year=2018, STD=F, stan_model_compiled, 
+oneYRfit <- function(Year=2018, STD=F, stan_model_compiled,
+                     stan_model_compiled_cens,
                      prr=prior(fitrv=prrs, b0="B0", de="De", 
                                ph="Ph",s0="sigma0",
                                sD="sigmaD", sP="sigmaP"), 
@@ -90,14 +91,30 @@ oneYRfit <- function(Year=2018, STD=F, stan_model_compiled,
 ##	    prr <- prior(fitrv=fitcoef1[[i-1]],
 ##	                 b0="mu0", de="muD", ph="muP")	    
 	  tmp <- subdata$gr <= i
-	  input.to.stan <- stan.in(infile=subdata[tmp,], info=T,
-	                           prrs=prr, stdz=STD,
-	                           n.chains=nchains)
+    cens <- sum(subdata$part_microcystin[tmp]<=0.01)
+    print(paste("No. of censored values:", cens))
+	  if (cens==0)
+	    input.to.stan <- stan.in(infile=subdata[tmp,], info=T,
+	                             prrs=prr, stdz=STD,
+	                             n.chains=nchains)
+	  else
+      input.to.stan <- stan.in_cens(infile=subdata[tmp,], info=T,
+	                                  prrs=prr, stdz=STD,
+	                                  n.chains=nchains)
 	  muxC <- input.to.stan$mux
 	  sdxC <- input.to.stan$sdx
 	  thetaC <- input.to.stan$data$theta
 
-	  fit3 <- sampling(stan_model_compiled,
+	  if (cens==0)
+	    fit3 <- sampling(stan_model_compiled,
+			   data = input.to.stan$data,
+			   init = input.to.stan$inits,
+			   pars = input.to.stan$para,
+			   iter = niters, thin=nthin, 
+			   chains=input.to.stan$n.chains)
+	  ##control = list(adapt_delta = 0.99, max_treedepth=20))
+	  else
+	    fit3 <- sampling(stan_model_compiled_cens,
 			   data = input.to.stan$data,
 			   init = input.to.stan$inits,
 			   pars = input.to.stan$para,
@@ -125,14 +142,29 @@ oneYRfit <- function(Year=2018, STD=F, stan_model_compiled,
 	    prr <- prior(fitrv=fitcoef2[[i-1]],
 	                 b0="mu0", de="muD", ph="muP")
 	  tmp <- subdata$gr == i
-	  input.to.stan <- stan.in(infile=subdata[tmp,], info=T, 
+    cens <- sum(subdata$part_microcystin[tmp]<=0.01)
+    print(paste("No. of censored values:", cens))
+	  if (cens==0)
+	    input.to.stan <- stan.in(infile=subdata[tmp,], info=T, 
+	                           prrs=prr, stdz=STD,
+	                           n.chains=nchains)
+	  else
+	    input.to.stan <- stan.in_cens(infile=subdata[tmp,], info=T, 
 	                           prrs=prr, stdz=STD,
 	                           n.chains=nchains)
 	  muxC <- input.to.stan$mux
 	  sdxC <- input.to.stan$sdx
 	  thetaC <- input.to.stan$data$theta
 
-	  fit3_inc<- sampling(stan_model_compiled,
+	  if(cens==0)
+	    fit3_inc<- sampling(stan_model_compiled,
+			                  data = input.to.stan$data, 
+			                  init=input.to.stan$inits,
+			                  pars = input.to.stan$para,
+			                  iter=niters, thin=nthin, 
+			                  chains=input.to.stan$n.chains)
+	  else
+	    fit3_inc<- sampling(stan_model_compiled_cens,
 			                  data = input.to.stan$data, 
 			                  init=input.to.stan$inits,
 			                  pars = input.to.stan$para,
@@ -155,10 +187,13 @@ oneYRfit <- function(Year=2018, STD=F, stan_model_compiled,
 }
 
 seq_mod <- stan_model(model_code = stan_model3)
+seq_mod_cens <- stan_model(model_code = stan_model3_cens)
   ## 2018
-oneYRfit(stan_model_compiled=seq_mod, no1718=F)
+oneYRfit(stan_model_compiled=seq_mod, 
+         stan_model_compiled_cens=seq_mod_cens, no1718=F)
   ## 2017
-oneYRfit(Year=2017, stan_model_compiled=seq_mod, no1718=F)
+oneYRfit(Year=2017, stan_model_compiled=seq_mod, 
+         stan_model_compiled_cens=seq_mod_cens, no1718=F)
 
 ## no 17_18
 load("MC_Chla_no18_17.RData")
@@ -166,20 +201,26 @@ print(fit2keep_1817$fit)
 stanout_1817 <- rstan::extract(fit2keep_1817$fit, permuted=T)
 
 prrs <- rvsims(as.matrix(as.data.frame(stanout_1817))) 
-oneYRfit(stan_model_compiled=seq_mod, no1718=T)
+oneYRfit(stan_model_compiled=seq_mod, 
+         stan_model_compiled_cens=seq_mod_cens, no1718=T)
   ## 2017
-oneYRfit(Year=2017, stan_model_compiled=seq_mod, no1718=T)
+oneYRfit(Year=2017, stan_model_compiled=seq_mod,
+         stan_model_compiled_cens=seq_mod_cens, no1718=T)
 
 
   ## 2016
-oneYRfit(Year=2016, stan_model_compiled=seq_mod)
+oneYRfit(Year=2016, stan_model_compiled=seq_mod,
+         stan_model_compiled_cens=seq_mod_cens)
   ## 2015
-oneYRfit(Year=2015, stan_model_compiled=seq_mod)
+oneYRfit(Year=2015, stan_model_compiled=seq_mod,
+         stan_model_compiled_cens=seq_mod_cens)
   ## 2014
-oneYRfit(Year=2014, stan_model_compiled=seq_mod)
+oneYRfit(Year=2014, stan_model_compiled=seq_mod,
+         stan_model_compiled_cens=seq_mod_cens)
   ## All years
 for (yr in 2012:2013) oneYRfit(Year=yr, 
-                               stan_model_compiled=seq_mod)
+                               stan_model_compiled=seq_mod,
+                               stan_model_compiled_cens=seq_mod_cens)
 
 ```
 
