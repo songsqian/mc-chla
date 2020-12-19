@@ -2,14 +2,18 @@
 
 stan_model2 <- "
           data{
-            int N; //the number of observations
+            int N; //number of observations
+            int Ncens; //number of censored observations
             vector[N] y; //the response
             vector[N] x;
+            vector[Ncens] xcens;
             int R;
             int region[N];
+            int regcens[Ncens];
 
             real theta;
             real beta1;
+            vector[Ncens] ycens; //0.01
           }
           parameters {
             real beta0; //the regression parameters
@@ -26,11 +30,17 @@ stan_model2 <- "
           }
           transformed parameters {
             vector[N] mu;
+            vector[Ncens] mucens;
             for (i in 1:N)
               mu[i] = (beta0+re0[region[i]]) +
                       (beta1) * (x[i]-(phi+reP[region[i]])) +
                       (delta+reD[region[i]]) * theta *
               log1p(exp((x[i]-(phi+reP[region[i]]))/theta));
+            for (i in 1:Ncens)
+              mucens[i] = (beta0+re0[regcens[i]]) +
+                      (beta1) * (xcens[i]-(phi+reP[regcens[i]])) +
+                      (delta+reD[regcens[i]]) * theta *
+              log1p(exp((xcens[i]-(phi+reP[regcens[i]]))/theta));
           }
           model {
             phi ~ cauchy(0,1);
@@ -45,7 +55,8 @@ stan_model2 <- "
             reD ~ normal(0, sigmaD);
             reP ~ normal(0, sigmaP);
 
-            y ~ normal(mu, sigma);
+            target += normal_lpdf(y | mu, sigma);
+            target += normal_lcdf(ycens | mucens, sigma);
           }
           generated quantities {
             real Ph;
@@ -67,23 +78,31 @@ stan_model2 <- "
 
 stan.in <- function(infile=eriedata, x = "POC", grp="Year",
                     n.chains=nchains){
-  infile$part_microcystin[infile$part_microcystin<0.01]<-0.01
-  x <- log(infile[,x])
-  y <- log(infile$part_microcystin)
-  gr <- as.numeric(ordered(infile[, grp]))
-  n <- dim(infile)[1]
-  R <- max(gr)
-  xlimit <- range(x, na.rm=T)
+  #infile$part_microcystin[infile$part_microcystin<0.01]<-0.01
+  cens <- infile$part_microcystin<=0.01
+  xtemp <- infile[,x]
+  x <- log(xtemp[!cens])
+  xcens <- log(xtemp[cens])
+  y <- log(infile$part_microcystin[!cens])
+  grtmp <- as.numeric(ordered(infile[, grp]))
+  gr <- grtmp[!cens]
+  grcens <- grtmp[cens]
+  n <- dim(infile)[1]-sum(cens)
+  ncens <- sum(cens)
+  ycens <- rep(log(0.01), ncens)
+  R <- max(grtmp)
+  xlimit <- log(range(xtemp, na.rm=T))
 
   inits <- list()
-  bugs.data <- list(N=n,  R=R, y=y, x=x, region=gr,
+  bugs.data <- list(N=n, Ncens=ncens, R=R, y=y, x=x, region=gr,
+                    xcens=xcens, ycens=ycens, regcens=grcens,
                     theta=0.01*diff(xlimit),
                     phi_low=xlimit[1], phi_up=xlimit[2],
                     beta1=0)
   for (i in 1:n.chains)
     inits[[i]] <- list(beta0=rnorm(1), delta=runif(1),
                        phi=runif(1, xlimit[1], xlimit[2]),
-                       re0=rep(0, R), reD=rep(0,R),
+                       re0=rep(0,R), reD=rep(0,R),
                        reP=rep(0,R),
                        sigma=runif(1),
                        sigma0=runif(1),sigmaD=runif(1),
