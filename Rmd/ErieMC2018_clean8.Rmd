@@ -34,7 +34,7 @@ temp1817 <- !is.na(eriedata$part_microcystin) &
 fit2keep_1817 <- running_fun(Data=eriedata[temp1817,])
 save(fit2keep_1817, file="MC_Chla_no18_17.RData")
 load("MC_Chla_no18_17.RData")
-load("Origin_MC_Chla.RData")
+## load("Origin_MC_Chla.RData")
 print(fit2keep_1817$fit)
 stanout_1817 <- rstan::extract(fit2keep_1817$fit, permuted=T)
 
